@@ -14,4 +14,4 @@ EXTRA_LIBS  ?= -lmbedtls -lmbedx509 -lmbedcrypto -lavformat -lavcodec -lswscale 
 LIBS        := -ltiny3d -ljpgdec -lpngdec -lcurl $(EXTRA_LIBS) -lz \
                -laudio -lnet -lio -lsysutil -lsysmodule -lm
 
-include $(PSL1GHT)/ppu_rules
+include $(PSL1GHT)/ppu_rules 
