@@ -83,20 +83,7 @@ jobs:
           if [ ! -f "$PORTLIBS/include/libavformat/avformat.h" ]; then
             rm -rf /tmp/ps3_compat_inc
             mkdir -p /tmp/ps3_compat_inc/netinet
-            cat << 'EOF' > /tmp/ps3_compat_inc/netinet/tcp.h
-          #ifndef _PS3_COMPAT_NETINET_TCP_H
-          #define _PS3_COMPAT_NETINET_TCP_H
-          #ifndef TCP_NODELAY
-          #define TCP_NODELAY 1
-          #endif
-          #ifndef TCP_MAXSEG
-          #define TCP_MAXSEG 2
-          #endif
-          #ifndef IPPROTO_TCP
-          #define IPPROTO_TCP 6
-          #endif
-          #endif
-          EOF
+            printf '#ifndef _PS3_COMPAT_NETINET_TCP_H\n#define _PS3_COMPAT_NETINET_TCP_H\n#ifndef TCP_NODELAY\n#define TCP_NODELAY 1\n#endif\n#ifndef TCP_MAXSEG\n#define TCP_MAXSEG 2\n#endif\n#ifndef IPPROTO_TCP\n#define IPPROTO_TCP 6\n#endif\n#endif\n' > /tmp/ps3_compat_inc/netinet/tcp.h
 
             rm -rf /tmp/ffmpeg*
             if curl -fSL https://ffmpeg.org/releases/ffmpeg-6.1.2.tar.xz -o /tmp/ffmpeg.tar.xz; then
@@ -186,22 +173,12 @@ jobs:
           rm -rf build pkg_build rafstream_ps3.elf RAFSTREAM_PS3.pkg
           mkdir -p build pkg_build/USRDIR
 
-          cat << 'EOF' > build/ps3_compat.c
-          #include <stddef.h>
-          #include <string.h>
-          int gethostname(char *name, size_t len) {
-              if (name && len > 0) {
-                  strncpy(name, "ps3", len - 1);
-                  name[len - 1] = '\0';
-              }
-              return 0;
-          }
-          EOF
+          printf '#include <stddef.h>\n#include <string.h>\nint gethostname(char *name, size_t len) {\n  if (name && len > 0) {\n    strncpy(name, "ps3", len - 1);\n    name[len - 1] = 0;\n  }\n  return 0;\n}\n' > build/ps3_compat.c
           powerpc64-ps3-elf-gcc -O2 -c build/ps3_compat.c -o build/ps3_compat.o
 
           for src in source/*.c; do
             obj="build/$(basename "${src%.c}.o")"
-            echo "Compiling $src ->$obj"
+            echo "Compiling $src -> $obj"
             powerpc64-ps3-elf-gcc -O2 -Wall -Iinclude -Isource \
               -I"$PSL1GHT/ppu/include" -I"$PORTLIBS/include" \
               -c "$src" -o "$obj"
@@ -218,4 +195,28 @@ jobs:
           [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
           if command -v make_self_npdrm >/dev/null 2>&1; then
-            make
+            make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN UP0001-RAFSTRM01_00-RAFSTREAMPS30001
+          elif command -v make_fself >/dev/null 2>&1; then
+            make_fself rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
+          else
+            FSELF_PY=$(find "$PS3DEV" -name "fself.py" | head -n 1)
+            python3 "$FSELF_PY" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN || python3 "$FSELF_PY" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
+          fi
+
+          SFO_BIN=$(find "$PS3DEV" -name "sfo.py" | head -n 1)
+          PKG_BIN=$(find "$PS3DEV" -name "pkg.py" | head -n 1)
+          SFO_XML=$(find . "$PS3DEV" -name "sfo.xml" | head -n 1)
+          if [ -z "$SFO_XML" ]; then
+            printf '<?xml version="1.0" encoding="UTF-8"?>\n<sfo>\n  <value name="APP_VER" type="string" max_len="8">01.00</value>\n  <value name="ATTRIBUTE" type="integer">0</value>\n  <value name="BOOTABLE" type="integer">1</value>\n  <value name="CATEGORY" type="string" max_len="4">HG</value>\n  <value name="LICENSE" type="string" max_len="512">RAFSTREAM PS3</value>\n  <value name="PARENTAL_LEVEL" type="integer">1</value>\n  <value name="PS3_SYSTEM_VER" type="string" max_len="8">03.4000</value>\n  <value name="RESOLUTION" type="integer">63</value>\n  <value name="SOUND_FORMAT" type="integer">1</value>\n  <value name="VERSION" type="string" max_len="8">01.00</value>\n</sfo>\n' > /tmp/sfo.xml
+            SFO_XML="/tmp/sfo.xml"
+          fi
+
+          python3 "$SFO_BIN" --title "RAFSTREAM PS3" --appid "RAFSTRM01" -f "$SFO_XML" pkg_build/PARAM.SFO
+          python3 "$PKG_BIN" --contentid UP0001-RAFSTRM01_00-RAFSTREAMPS30001 pkg_build/ RAFSTREAM_PS3.pkg
+          ls -lh RAFSTREAM_PS3.pkg
+
+      - name: Upload RAFSTREAM_PS3.pkg Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RAFSTREAM_PS3_PKG
+          path: "*.pkg"
