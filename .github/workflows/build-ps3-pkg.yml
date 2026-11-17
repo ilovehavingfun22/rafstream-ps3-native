@@ -14,12 +14,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Restore Cached PS3DEV Toolchain
-        uses: actions/cache@v4
+        id: cache-ps3dev
+        uses: actions/cache/restore@v4
         with:
           path: /usr/local/ps3dev
           key: ps3dev-prebuilt-v5
 
       - name: Setup PS3DEV & PSL1GHT Toolchain
+        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
         run: |
           set -e
           sudo apt-get update
@@ -55,6 +57,13 @@ jobs:
             ./build-all.sh
           fi
 
+      - name: Save PS3DEV Toolchain Cache
+        if: always() && steps.cache-ps3dev.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /usr/local/ps3dev
+          key: ps3dev-prebuilt-v5
+
       - name: Compile EBOOT.BIN & Build RAFSTREAM_PS3.pkg
         run: |
           set -e
@@ -77,31 +86,41 @@ jobs:
           '
           fi
 
-          SSL_LIBS=""
+          LIBS="-ltiny3d -lrsx -lgcm_sys -ljpgdec -lpngdec -lcurl"
           if [ -f "$PORTLIBS/lib/libmbedtls.a" ]; then
-            SSL_LIBS="-lmbedtls -lmbedx509 -lmbedcrypto"
+            LIBS="$LIBS -lmbedtls -lmbedx509 -lmbedcrypto"
           elif [ -f "$PORTLIBS/lib/libpolarssl.a" ]; then
-            SSL_LIBS="-lpolarssl"
+            LIBS="$LIBS -lpolarssl"
           elif [ -f "$PORTLIBS/lib/libwolfssl.a" ]; then
-            SSL_LIBS="-lwolfssl"
+            LIBS="$LIBS -lwolfssl"
           fi
+          [ -f "$PORTLIBS/lib/libavformat.a" ] && LIBS="$LIBS -lavformat"
+          [ -f "$PORTLIBS/lib/libavcodec.a" ] && LIBS="$LIBS -lavcodec"
+          [ -f "$PORTLIBS/lib/libswscale.a" ] && LIBS="$LIBS -lswscale"
+          [ -f "$PORTLIBS/lib/libswresample.a" ] && LIBS="$LIBS -lswresample"
+          [ -f "$PORTLIBS/lib/libavutil.a" ] && LIBS="$LIBS -lavutil"
+          LIBS="$LIBS -lz -laudio -lnet"
+          [ -f "$PSL1GHT/ppu/lib/libnetctl.a" ] && LIBS="$LIBS -lnetctl"
+          LIBS="$LIBS -lio -lsysutil -lsysmodule"
+          [ -f "$PSL1GHT/ppu/lib/liblv2.a" ] && LIBS="$LIBS -llv2"
+          LIBS="$LIBS -lm"
 
-          FF_LIBS=""
-          [ -f "$PORTLIBS/lib/libavformat.a" ] && FF_LIBS="$FF_LIBS -lavformat"
-          [ -f "$PORTLIBS/lib/libavcodec.a" ] && FF_LIBS="$FF_LIBS -lavcodec"
-          [ -f "$PORTLIBS/lib/libswscale.a" ] && FF_LIBS="$FF_LIBS -lswscale"
-          [ -f "$PORTLIBS/lib/libswresample.a" ] && FF_LIBS="$FF_LIBS -lswresample"
-          [ -f "$PORTLIBS/lib/libavutil.a" ] && FF_LIBS="$FF_LIBS -lavutil"
+          rm -rf build pkg_build rafstream_ps3.elf RAFSTREAM_PS3.pkg
+          mkdir -p build pkg_build/USRDIR
 
-          rm -rf build rafstream_ps3.elf rafstream_ps3.self RAFSTREAM_PS3.pkg
-          make SRCDIRS=source SOURCES=source \
-               CC=powerpc64-ps3-elf-gcc CXX=powerpc64-ps3-elf-g++ LD=powerpc64-ps3-elf-gcc \
-               AR=powerpc64-ps3-elf-ar AS=powerpc64-ps3-elf-as \
-               OBJCOPY=powerpc64-ps3-elf-objcopy STRIP=powerpc64-ps3-elf-strip \
-               EXTRA_LIBS="$SSL_LIBS $FF_LIBS" rafstream_ps3.elf
+          for src in source/*.c; do
+            obj="build/$(basename "${src%.c}.o")"
+            echo "Compiling $src -> $obj"
+            powerpc64-ps3-elf-gcc -O2 -Wall -Iinclude -Isource \
+              -I"$PSL1GHT/ppu/include" -I"$PORTLIBS/include" \
+              -c "$src" -o "$obj"
+          done
 
-          rm -rf pkg_build
-          mkdir -p pkg_build/USRDIR
+          echo "Linking rafstream_ps3.elf"
+          powerpc64-ps3-elf-gcc build/*.o \
+            -L"$PSL1GHT/ppu/lib" -L"$PORTLIBS/lib" \
+            $LIBS -o rafstream_ps3.elf
+
           cp ICON0.PNG pkg_build/ICON0.PNG
           [ -f PIC1.PNG ] && cp PIC1.PNG pkg_build/PIC1.PNG || true
 
