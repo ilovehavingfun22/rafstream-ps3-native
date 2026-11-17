@@ -11,7 +11,7 @@
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 
-/* Pemutar Video Streaming Native PS3 (FFmpeg libavformat + RSX Texture + AudioOut) */
+/* Kompatibel dengan FFmpeg 2.x/3.0 maupun FFmpeg 3.1+ di ps3libraries */
 int play_stream_video(const char *stream_url, const char *video_title) {
     AVFormatContext *fmt_ctx = NULL;
     AVDictionary *opts = NULL;
@@ -37,9 +37,14 @@ int play_stream_video(const char *stream_url, const char *video_title) {
     int video_idx = -1;
     int audio_idx = -1;
     for (unsigned int i = 0; i < fmt_ctx->nb_streams; i++) {
-        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && video_idx < 0) {
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
+        enum AVMediaType mtype = fmt_ctx->streams[i]->codecpar->codec_type;
+#else
+        enum AVMediaType mtype = fmt_ctx->streams[i]->codec->codec_type;
+#endif
+        if (mtype == AVMEDIA_TYPE_VIDEO && video_idx < 0) {
             video_idx = (int)i;
-        } else if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && audio_idx < 0) {
+        } else if (mtype == AVMEDIA_TYPE_AUDIO && audio_idx < 0) {
             audio_idx = (int)i;
         }
     }
@@ -49,17 +54,28 @@ int play_stream_video(const char *stream_url, const char *video_title) {
         return -3;
     }
 
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
     const AVCodec *vcodec = avcodec_find_decoder(fmt_ctx->streams[video_idx]->codecpar->codec_id);
     if (!vcodec) {
         avformat_close_input(&fmt_ctx);
         return -4;
     }
-
     AVCodecContext *vctx = avcodec_alloc_context3(vcodec);
     avcodec_parameters_to_context(vctx, fmt_ctx->streams[video_idx]->codecpar);
+#else
+    AVCodecContext *vctx = fmt_ctx->streams[video_idx]->codec;
+    AVCodec *vcodec = avcodec_find_decoder(vctx->codec_id);
+    if (!vcodec) {
+        avformat_close_input(&fmt_ctx);
+        return -4;
+    }
+#endif
+
     vctx->thread_count = 2;
     if (avcodec_open2(vctx, vcodec, NULL) < 0) {
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
         avcodec_free_context(&vctx);
+#endif
         avformat_close_input(&fmt_ctx);
         return -5;
     }
@@ -73,32 +89,36 @@ int play_stream_video(const char *stream_url, const char *video_title) {
     int audio_ready = 0;
 
     if (audio_idx >= 0) {
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
         const AVCodec *acodec = avcodec_find_decoder(fmt_ctx->streams[audio_idx]->codecpar->codec_id);
         if (acodec) {
             actx = avcodec_alloc_context3(acodec);
             avcodec_parameters_to_context(actx, fmt_ctx->streams[audio_idx]->codecpar);
-            if (avcodec_open2(actx, acodec, NULL) == 0) {
-                memset(&a_param, 0, sizeof(a_param));
-                a_param.numChannels = AUDIO_PORT_2CH;
-                a_param.numBlocks = AUDIO_BLOCK_8;
-                a_param.attrib = 0;
-                a_param.level = 1.0f;
-                if (audioPortOpen(&a_param, &audio_port) == 0) {
-                    audioGetPortConfig(audio_port, &a_config);
-                    audioPortStart(audio_port);
-                    swr = swr_alloc_set_opts(NULL,
-                        AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_FLT, 48000,
-                        actx->channel_layout ? (int64_t)actx->channel_layout : AV_CH_LAYOUT_STEREO,
-                        actx->sample_fmt, actx->sample_rate, 0, NULL);
-                    if (swr && swr_init(swr) >= 0) {
-                        audio_ready = 1;
-                    }
+        }
+#else
+        actx = fmt_ctx->streams[audio_idx]->codec;
+        AVCodec *acodec = avcodec_find_decoder(actx->codec_id);
+#endif
+        if (acodec && actx && avcodec_open2(actx, acodec, NULL) == 0) {
+            memset(&a_param, 0, sizeof(a_param));
+            a_param.numChannels = AUDIO_PORT_2CH;
+            a_param.numBlocks = AUDIO_BLOCK_8;
+            a_param.attrib = 0;
+            a_param.level = 1.0f;
+            if (audioPortOpen(&a_param, &audio_port) == 0) {
+                audioGetPortConfig(audio_port, &a_config);
+                audioPortStart(audio_port);
+                swr = swr_alloc_set_opts(NULL,
+                    AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_FLT, 48000,
+                    actx->channel_layout ? (int64_t)actx->channel_layout : AV_CH_LAYOUT_STEREO,
+                    actx->sample_fmt, actx->sample_rate, 0, NULL);
+                if (swr && swr_init(swr) >= 0) {
+                    audio_ready = 1;
                 }
             }
         }
     }
 
-    /* Konversi frame video ke ARGB 32-bit untuk ditampilkan via RSX Tiny3D */
     int dst_w = (vctx->width > 1280) ? 1280 : vctx->width;
     int dst_h = (vctx->height > 720) ? 720 : vctx->height;
     struct SwsContext *sws = sws_getContext(
@@ -115,7 +135,11 @@ int play_stream_video(const char *stream_url, const char *video_title) {
     argb_frame->data[0] = (uint8_t *)rsx_frame;
     argb_frame->linesize[0] = dst_w * 4;
 
-    AVPacket *pkt = av_packet_alloc();
+    AVPacket pkt;
+    av_init_packet(&pkt);
+    pkt.data = NULL;
+    pkt.size = 0;
+
     padInfo padinfo;
     padData paddata;
     u32 prev_btn = 0;
@@ -132,16 +156,13 @@ int play_stream_video(const char *stream_url, const char *video_title) {
             prev_btn = paddata.button[2];
 
             if (paddata.BTN_CIRCLE) {
-                running = 0; /* Tombol O: Stop & kembali ke detail */
+                running = 0;
                 break;
             }
-            if (pressed & (1 << 14)) { /* Tombol X: Pause / Resume */
+            if (pressed & (1 << 14)) {
                 paused = !paused;
             }
             if (paddata.BTN_RIGHT || paddata.BTN_LEFT) {
-                int64_t step = paddata.BTN_RIGHT ? (10 * AV_TIME_BASE) : (-10 * AV_TIME_BASE);
-                int64_t target = av_gettime() + step;
-                (void)target;
                 av_seek_frame(fmt_ctx, -1, (paddata.BTN_RIGHT ? 15 : -15) * AV_TIME_BASE, AVSEEK_FLAG_ANY);
             }
         }
@@ -151,53 +172,62 @@ int play_stream_video(const char *stream_url, const char *video_title) {
             continue;
         }
 
-        int r = av_read_frame(fmt_ctx, pkt);
-        if (r < 0) {
-            break; /* Video selesai atau terputus */
+        if (av_read_frame(fmt_ctx, &pkt) < 0) {
+            break;
         }
 
-        if (pkt->stream_index == video_idx) {
-            if (avcodec_send_packet(vctx, pkt) == 0) {
-                while (avcodec_receive_frame(vctx, frame) == 0) {
-                    sws_scale(sws, (const uint8_t * const *)frame->data, frame->linesize,
-                              0, vctx->height, argb_frame->data, argb_frame->linesize);
-
-                    tiny3d_Clear(0xFF000000, TINY3D_CLEAR_ALL);
-                    tiny3d_SetTexture(0, rsx_offset, dst_w, dst_h, dst_w * 4, TINY3D_TEX_FORMAT_A8R8G8B8, 1);
-
-                    float scale_x = 848.0f;
-                    float scale_y = 512.0f;
-                    tiny3d_SetPolygon(TINY3D_QUADS);
-                    tiny3d_VertexPos(0.0f, 0.0f, 0.0f);
-                    tiny3d_VertexTexture(0.0f, 0.0f);
-                    tiny3d_VertexPos(scale_x, 0.0f, 0.0f);
-                    tiny3d_VertexTexture(1.0f, 0.0f);
-                    tiny3d_VertexPos(scale_x, scale_y, 0.0f);
-                    tiny3d_VertexTexture(1.0f, 1.0f);
-                    tiny3d_VertexPos(0.0f, scale_y, 0.0f);
-                    tiny3d_VertexTexture(0.0f, 1.0f);
-                    tiny3d_End();
-                    tiny3d_Flip();
-                }
+        if (pkt.stream_index == video_idx) {
+            int got_frame = 0;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
+            if (avcodec_send_packet(vctx, &pkt) == 0 && avcodec_receive_frame(vctx, frame) == 0) {
+                got_frame = 1;
             }
-        } else if (audio_ready && pkt->stream_index == audio_idx) {
-            if (avcodec_send_packet(actx, pkt) == 0) {
-                while (avcodec_receive_frame(actx, frame) == 0) {
-                    float out_samples[4096 * 2];
-                    uint8_t *out_ptr = (uint8_t *)out_samples;
-                    int converted = swr_convert(swr, &out_ptr, 4096,
-                                                (const uint8_t **)frame->data, frame->nb_samples);
-                    if (converted > 0) {
-                        u32 *ring = (u32 *)(uintptr_t)a_config.audioDataStart;
-                        size_t copy_bytes = (size_t)converted * 2 * sizeof(float);
-                        if (copy_bytes > 256 * 2 * sizeof(float)) copy_bytes = 256 * 2 * sizeof(float);
-                        memcpy(ring, out_samples, copy_bytes);
-                    }
+#else
+            avcodec_decode_video2(vctx, frame, &got_frame, &pkt);
+#endif
+            if (got_frame) {
+                sws_scale(sws, (const uint8_t * const *)frame->data, frame->linesize,
+                          0, vctx->height, argb_frame->data, argb_frame->linesize);
+
+                tiny3d_Clear(0xFF000000, TINY3D_CLEAR_ALL);
+                tiny3d_SetTexture(0, rsx_offset, dst_w, dst_h, dst_w * 4, TINY3D_TEX_FORMAT_A8R8G8B8, 1);
+
+                tiny3d_SetPolygon(TINY3D_QUADS);
+                tiny3d_VertexPos(0.0f, 0.0f, 0.0f);
+                tiny3d_VertexTexture(0.0f, 0.0f);
+                tiny3d_VertexPos(848.0f, 0.0f, 0.0f);
+                tiny3d_VertexTexture(1.0f, 0.0f);
+                tiny3d_VertexPos(848.0f, 512.0f, 0.0f);
+                tiny3d_VertexTexture(1.0f, 1.0f);
+                tiny3d_VertexPos(0.0f, 512.0f, 0.0f);
+                tiny3d_VertexTexture(0.0f, 1.0f);
+                tiny3d_End();
+                tiny3d_Flip();
+            }
+        } else if (audio_ready && pkt.stream_index == audio_idx) {
+            int got_audio = 0;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
+            if (avcodec_send_packet(actx, &pkt) == 0 && avcodec_receive_frame(actx, frame) == 0) {
+                got_audio = 1;
+            }
+#else
+            avcodec_decode_audio4(actx, frame, &got_audio, &pkt);
+#endif
+            if (got_audio) {
+                float out_samples[4096 * 2];
+                uint8_t *out_ptr = (uint8_t *)out_samples;
+                int converted = swr_convert(swr, &out_ptr, 4096,
+                                            (const uint8_t **)frame->data, frame->nb_samples);
+                if (converted > 0) {
+                    u32 *ring = (u32 *)(uintptr_t)a_config.audioDataStart;
+                    size_t copy_bytes = (size_t)converted * 2 * sizeof(float);
+                    if (copy_bytes > 256 * 2 * sizeof(float)) copy_bytes = 256 * 2 * sizeof(float);
+                    memcpy(ring, out_samples, copy_bytes);
                 }
             }
         }
 
-        av_packet_unref(pkt);
+        av_packet_unref(&pkt);
     }
 
     if (audio_ready) {
@@ -205,12 +235,16 @@ int play_stream_video(const char *stream_url, const char *video_title) {
         audioPortClose(audio_port);
         if (swr) swr_free(&swr);
     }
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
     if (actx) avcodec_free_context(&actx);
-    av_packet_free(&pkt);
+    avcodec_free_context(&vctx);
+#else
+    if (actx) avcodec_close(actx);
+    avcodec_close(vctx);
+#endif
     av_frame_free(&argb_frame);
     av_frame_free(&frame);
     sws_freeContext(sws);
-    avcodec_free_context(&vctx);
     avformat_close_input(&fmt_ctx);
     return 0;
 }
