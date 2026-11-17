@@ -58,7 +58,7 @@ jobs:
           fi
 
       - name: Save PS3DEV Toolchain Cache
-        if: always() && steps.cache-ps3dev.outputs.cache-hit != 'true'
+        if: success() && steps.cache-ps3dev.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: /usr/local/ps3dev
@@ -69,7 +69,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /usr/local/ps3dev/portlibs/ppu
-          key: ps3dev-ffmpeg-v1
+          key: ps3dev-ffmpeg-v2
 
       - name: Build FFmpeg for PS3 (PPU)
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
@@ -82,11 +82,11 @@ jobs:
 
           if [ ! -f "$PORTLIBS/include/libavformat/avformat.h" ]; then
             rm -rf /tmp/ffmpeg*
-            if curl -fSL https://ffmpeg.org/releases/ffmpeg-4.2.9.tar.xz -o /tmp/ffmpeg.tar.xz; then
+            if curl -fSL https://ffmpeg.org/releases/ffmpeg-6.1.2.tar.xz -o /tmp/ffmpeg.tar.xz; then
               mkdir -p /tmp/ffmpeg
               tar -xaf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1
             else
-              git clone --depth 1 --branch n4.2.9 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
+              git clone --depth 1 --branch n6.1.2 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
             fi
 
             cd /tmp/ffmpeg
@@ -114,11 +114,11 @@ jobs:
               --disable-asm \
               --enable-zlib"
 
-            EXTRA_CF="-O2 -I$PSL1GHT/ppu/include -I$PORTLIBS/include"
+            EXTRA_CF="-O2 -Dasm=__asm__ -Dinline=__inline__ -Dtypeof=__typeof__ -I$PSL1GHT/ppu/include -I$PORTLIBS/include"
             EXTRA_LF="-L$PSL1GHT/ppu/lib -L$PORTLIBS/lib"
 
-            if [ -f "$PORTLIBS/lib/libmbedtls.a" ] && ./configure $COMMON_FLAGS --enable-network --enable-mbedtls --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lmbedtls -lmbedx509 -lmbedcrypto -lnet -lsysmodule -lz -lm"; then
-              echo "Configured FFmpeg with mbedTLS + network"
+            if [ -f "$PORTLIBS/lib/libmbedtls.a" ] && ./configure $COMMON_FLAGS --enable-version3 --enable-network --enable-mbedtls --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lmbedtls -lmbedx509 -lmbedcrypto -lnet -lsysmodule -lz -lm"; then
+              echo "Configured FFmpeg with mbedTLS v3 + network"
             elif ./configure $COMMON_FLAGS --enable-network --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lnet -lsysmodule -lz -lm"; then
               echo "Configured FFmpeg with network"
             else
@@ -130,11 +130,11 @@ jobs:
           fi
 
       - name: Save FFmpeg Portlib Cache
-        if: always() && steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        if: success() && steps.cache-ffmpeg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: /usr/local/ps3dev/portlibs/ppu
-          key: ps3dev-ffmpeg-v1
+          key: ps3dev-ffmpeg-v2
 
       - name: Compile EBOOT.BIN & Build RAFSTREAM_PS3.pkg
         run: |
