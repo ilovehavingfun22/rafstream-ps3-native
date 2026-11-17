@@ -81,6 +81,20 @@ jobs:
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
 
           if [ ! -f "$PORTLIBS/include/libavformat/avformat.h" ]; then
+            rm -rf /tmp/ps3_compat_inc
+            mkdir -p /tmp/ps3_compat_inc/netinet
+            cat << 'EOF' > /tmp/ps3_compat_inc/netinet/tcp.h
+          #ifndef _PS3_COMPAT_NETINET_TCP_H
+          #define _PS3_COMPAT_NETINET_TCP_H
+          #ifndef TCP_NODELAY
+          #define TCP_NODELAY 1
+          #endif
+          #ifndef IPPROTO_TCP
+          #define IPPROTO_TCP 6
+          #endif
+          #endif
+          EOF
+
             rm -rf /tmp/ffmpeg*
             if curl -fSL https://ffmpeg.org/releases/ffmpeg-6.1.2.tar.xz -o /tmp/ffmpeg.tar.xz; then
               mkdir -p /tmp/ffmpeg
@@ -106,6 +120,8 @@ jobs:
               --disable-encoders \
               --disable-muxers \
               --disable-devices \
+              --disable-protocols \
+              --enable-protocol=file,http,https,tls,tcp,hls,crypto,data \
               --disable-pthreads \
               --disable-w32threads \
               --disable-os2threads \
@@ -114,7 +130,7 @@ jobs:
               --disable-asm \
               --enable-zlib"
 
-            EXTRA_CF="-O2 -Dasm=__asm__ -Dinline=__inline__ -Dtypeof=__typeof__ -I$PSL1GHT/ppu/include -I$PORTLIBS/include"
+            EXTRA_CF="-O2 -Dasm=__asm__ -Dinline=__inline__ -Dtypeof=__typeof__ -I$PSL1GHT/ppu/include -I$PORTLIBS/include -I/tmp/ps3_compat_inc"
             EXTRA_LF="-L$PSL1GHT/ppu/lib -L$PORTLIBS/lib"
 
             if [ -f "$PORTLIBS/lib/libmbedtls.a" ] && ./configure $COMMON_FLAGS --enable-version3 --enable-network --enable-mbedtls --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lmbedtls -lmbedx509 -lmbedcrypto -lnet -lsysmodule -lz -lm"; then
