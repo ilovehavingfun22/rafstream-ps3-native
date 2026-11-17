@@ -186,9 +186,22 @@ jobs:
           rm -rf build pkg_build rafstream_ps3.elf RAFSTREAM_PS3.pkg
           mkdir -p build pkg_build/USRDIR
 
+          cat << 'EOF' > build/ps3_compat.c
+          #include <stddef.h>
+          #include <string.h>
+          int gethostname(char *name, size_t len) {
+              if (name && len > 0) {
+                  strncpy(name, "ps3", len - 1);
+                  name[len - 1] = '\0';
+              }
+              return 0;
+          }
+          EOF
+          powerpc64-ps3-elf-gcc -O2 -c build/ps3_compat.c -o build/ps3_compat.o
+
           for src in source/*.c; do
             obj="build/$(basename "${src%.c}.o")"
-            echo "Compiling $src -> $obj"
+            echo "Compiling $src ->$obj"
             powerpc64-ps3-elf-gcc -O2 -Wall -Iinclude -Isource \
               -I"$PSL1GHT/ppu/include" -I"$PORTLIBS/include" \
               -c "$src" -o "$obj"
@@ -204,23 +217,5 @@ jobs:
           PIC_FILE=$(find . -maxdepth 2 -iname "PIC1.PNG" | head -n 1)
           [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
-          FSELF_BIN=$(find "$PS3DEV" -name "make_self_npdrm" -o -name "fself.py" | head -n 1)
-          SFO_BIN=$(find "$PS3DEV" -name "sfo.py" | head -n 1)
-          PKG_BIN=$(find "$PS3DEV" -name "pkg.py" | head -n 1)
-          SFO_XML=$(find . "$PS3DEV" -name "sfo.xml" | head -n 1)
-
-          if [[ "$FSELF_BIN" == *.py ]]; then
-            python3 "$FSELF_BIN" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN || python3 "$FSELF_BIN" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
-          else
-            "$FSELF_BIN" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN UP0001-RAFSTRM01_00-RAFSTREAMPS30001
-          fi
-
-          python3 "$SFO_BIN" --title "RAFSTREAM PS3" --appid "RAFSTRM01" -f "$SFO_XML" pkg_build/PARAM.SFO
-          python3 "$PKG_BIN" --contentid UP0001-RAFSTRM01_00-RAFSTREAMPS30001 pkg_build/ RAFSTREAM_PS3.pkg
-          ls -lh RAFSTREAM_PS3.pkg
-
-      - name: Upload RAFSTREAM_PS3.pkg Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: RAFSTREAM_PS3_PKG
-          path: "*.pkg"
+          if command -v make_self_npdrm >/dev/null 2>&1; then
+            make
