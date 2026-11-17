@@ -93,7 +93,26 @@ jobs:
           [ -f "$PORTLIBS/lib/libswresample.a" ] && FF_LIBS="$FF_LIBS -lswresample"
           [ -f "$PORTLIBS/lib/libavutil.a" ] && FF_LIBS="$FF_LIBS -lavutil"
 
-          make EXTRA_LIBS="$SSL_LIBS $FF_LIBS" pkg
+          make clean || true
+          make CC=powerpc64-ps3-elf-gcc CXX=powerpc64-ps3-elf-g++ LD=powerpc64-ps3-elf-gcc \
+               AR=powerpc64-ps3-elf-ar AS=powerpc64-ps3-elf-as \
+               OBJCOPY=powerpc64-ps3-elf-objcopy STRIP=powerpc64-ps3-elf-strip \
+               EXTRA_LIBS="$SSL_LIBS $FF_LIBS" rafstream_ps3.elf
+
+          rm -rf pkg_build
+          mkdir -p pkg_build/USRDIR
+          cp ICON0.PNG pkg_build/ICON0.PNG
+          [ -f PIC1.PNG ] && cp PIC1.PNG pkg_build/PIC1.PNG || true
+
+          if command -v make_self_npdrm >/dev/null 2>&1; then
+            make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN UP0001-RAFSTRM01_00-RAFSTREAMPS30001
+          else
+            python3 "$PSL1GHT/bin/fself.py" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
+          fi
+
+          python3 "$PSL1GHT/bin/sfo.py" --title "RAFSTREAM PS3" --appid "RAFSTRM01" -f sfo.xml pkg_build/PARAM.SFO
+          python3 "$PSL1GHT/bin/pkg.py" --contentid UP0001-RAFSTRM01_00-RAFSTREAMPS30001 pkg_build/ RAFSTREAM_PS3.pkg
+          ls -lh RAFSTREAM_PS3.pkg
 
       - name: Upload RAFSTREAM_PS3.pkg Artifact
         uses: actions/upload-artifact@v4
