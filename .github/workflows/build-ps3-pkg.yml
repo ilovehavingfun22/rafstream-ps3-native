@@ -130,7 +130,7 @@ jobs:
               --disable-asm \
               --enable-zlib"
 
-            EXTRA_CF="-O2 -Dasm=__asm__ -Dinline=__inline__ -Dtypeof=__typeof__ -I$PSL1GHT/ppu/include -I$PORTLIBS/include -I/tmp/ps3_compat_inc"
+            EXTRA_CF="-O2 -D_GNU_SOURCE -Dasm=__asm__ -Dinline=__inline__ -Dtypeof=__typeof__ -Dclosesocket=close -include sys/time.h -include unistd.h -I$PSL1GHT/ppu/include -I$PORTLIBS/include -I/tmp/ps3_compat_inc"
             EXTRA_LF="-L$PSL1GHT/ppu/lib -L$PORTLIBS/lib"
 
             if [ -f "$PORTLIBS/lib/libmbedtls.a" ] && ./configure $COMMON_FLAGS --enable-version3 --enable-network --enable-mbedtls --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lmbedtls -lmbedx509 -lmbedcrypto -lnet -lsysmodule -lz -lm"; then
@@ -141,6 +141,7 @@ jobs:
               ./configure $COMMON_FLAGS --disable-network --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lz -lm"
             fi
 
+            sed -i 's/-Werror=implicit-function-declaration/-Wno-error/g' ffbuild/config.mak
             make -j$(nproc)
             make install
           fi
