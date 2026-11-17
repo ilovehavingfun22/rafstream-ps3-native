@@ -8,37 +8,74 @@ on:
 jobs:
   build-ps3-pkg:
     runs-on: ubuntu-latest
-    container:
-      image: ps3dev/ps3dev:latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Compile EBOOT.BIN & Build RAFSTREAM_PS3.pkg
+      - name: Pull Official PS3DEV Container (GHCR)
+        id: docker_check
         run: |
-          export PS3DEV=/usr/local/ps3dev
-          export PSL1GHT=$PS3DEV/psl1ght
-          export PORTLIBS=$PS3DEV/portlibs/ppu
-          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
-
-          SSL_LIBS=""
-          if [ -f "$PORTLIBS/lib/libmbedtls.a" ]; then
-            SSL_LIBS="-lmbedtls -lmbedx509 -lmbedcrypto"
-          elif [ -f "$PORTLIBS/lib/libpolarssl.a" ]; then
-            SSL_LIBS="-lpolarssl"
-          elif [ -f "$PORTLIBS/lib/libwolfssl.a" ]; then
-            SSL_LIBS="-lwolfssl"
+          if docker pull ghcr.io/ps3dev/ps3dev:latest; then
+            echo "use_docker=true" >> $GITHUB_OUTPUT
+          else
+            echo "use_docker=false" >> $GITHUB_OUTPUT
           fi
 
-          FF_LIBS=""
-          [ -f "$PORTLIBS/lib/libavformat.a" ] && FF_LIBS="$FF_LIBS -lavformat"
-          [ -f "$PORTLIBS/lib/libavcodec.a" ] && FF_LIBS="$FF_LIBS -lavcodec"
-          [ -f "$PORTLIBS/lib/libswscale.a" ] && FF_LIBS="$FF_LIBS -lswscale"
-          [ -f "$PORTLIBS/lib/libswresample.a" ] && FF_LIBS="$FF_LIBS -lswresample"
-          [ -f "$PORTLIBS/lib/libavutil.a" ] && FF_LIBS="$FF_LIBS -lavutil"
+      - name: Restore Cached PS3DEV Toolchain (Fallback)
+        if: steps.docker_check.outputs.use_docker != 'true'
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/ps3dev
+          key: ps3dev-toolchain-v1
 
-          make EXTRA_LIBS="$SSL_LIBS $FF_LIBS" pkg
+      - name: Build PS3DEV Toolchain From Source (Fallback)
+        if: steps.docker_check.outputs.use_docker != 'true'
+        run: |
+          if [ ! -d "/usr/local/ps3dev/psl1ght" ]; then
+            sudo apt-get update
+            sudo apt-get install -y autoconf automake bison flex texinfo libncurses5-dev gcc g++ make wget libgmp3-dev libmpfr-dev libmpc-dev libssl-dev libtool pkg-config python3 zlib1g-dev git bzip2 xz-utils
+            sudo mkdir -p /usr/local/ps3dev
+            sudo chown -R $USER:$USER /usr/local/ps3dev
+            git clone --depth 1 https://github.com/ps3dev/ps3dev.git /tmp/ps3dev
+            cd /tmp/ps3dev
+            export PS3DEV=/usr/local/ps3dev
+            export PSL1GHT=$PS3DEV/psl1ght
+            export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
+            ./toolchain.sh
+          fi
+
+      - name: Compile EBOOT.BIN & Build RAFSTREAM_PS3.pkg
+        run: |
+          BUILD_SCRIPT='
+            export PS3DEV=/usr/local/ps3dev
+            export PSL1GHT=$PS3DEV/psl1ght
+            export PORTLIBS=$PS3DEV/portlibs/ppu
+            export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
+
+            SSL_LIBS=""
+            if [ -f "$PORTLIBS/lib/libmbedtls.a" ]; then
+              SSL_LIBS="-lmbedtls -lmbedx509 -lmbedcrypto"
+            elif [ -f "$PORTLIBS/lib/libpolarssl.a" ]; then
+              SSL_LIBS="-lpolarssl"
+            elif [ -f "$PORTLIBS/lib/libwolfssl.a" ]; then
+              SSL_LIBS="-lwolfssl"
+            fi
+
+            FF_LIBS=""
+            [ -f "$PORTLIBS/lib/libavformat.a" ] && FF_LIBS="$FF_LIBS -lavformat"
+            [ -f "$PORTLIBS/lib/libavcodec.a" ] && FF_LIBS="$FF_LIBS -lavcodec"
+            [ -f "$PORTLIBS/lib/libswscale.a" ] && FF_LIBS="$FF_LIBS -lswscale"
+            [ -f "$PORTLIBS/lib/libswresample.a" ] && FF_LIBS="$FF_LIBS -lswresample"
+            [ -f "$PORTLIBS/lib/libavutil.a" ] && FF_LIBS="$FF_LIBS -lavutil"
+
+            make EXTRA_LIBS="$SSL_LIBS $FF_LIBS" pkg
+          '
+          if [ "${{ steps.docker_check.outputs.use_docker }}" = "true" ]; then
+            docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src ghcr.io/ps3dev/ps3dev:latest bash -c "$BUILD_SCRIPT && chmod -R a+rwX /src"
+          else
+            bash -c "$BUILD_SCRIPT"
+          fi
 
       - name: Upload RAFSTREAM_PS3.pkg Artifact
         uses: actions/upload-artifact@v4
