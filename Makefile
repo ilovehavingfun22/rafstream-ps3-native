@@ -10,8 +10,8 @@ INCLUDES    := include
 
 CFLAGS      := -O2 -Wall -I$(CURDIR)/$(INCLUDES) -I$(PSL1GHT)/ppu/include -I$(PORTLIBS)/include
 LDFLAGS     := -L$(PSL1GHT)/ppu/lib -L$(PORTLIBS)/lib
-LIBS        := -ltiny3d -ljpgdec -lpngdec -lcurl -lmbedtls -lmbedx509 -lmbedcrypto \
-               -lavformat -lavcodec -lswscale -lswresample -lavutil -lz \
+EXTRA_LIBS  ?= -lmbedtls -lmbedx509 -lmbedcrypto -lavformat -lavcodec -lswscale -lswresample -lavutil
+LIBS        := -ltiny3d -ljpgdec -lpngdec -lcurl $(EXTRA_LIBS) -lz \
                -laudio -lnet -lio -lsysutil -lsysmodule -lm
 
 include $(PSL1GHT)/ppu_rules
