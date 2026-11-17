@@ -9,7 +9,7 @@ jobs:
   build-ps3-pkg:
     runs-on: ubuntu-latest
     container:
-      image: ps3dev/ps3toolchain:latest
+      image: ps3dev/ps3dev:latest
 
     steps:
       - name: Checkout Repository
@@ -17,7 +17,28 @@ jobs:
 
       - name: Compile EBOOT.BIN & Build RAFSTREAM_PS3.pkg
         run: |
-          make pkg
+          export PS3DEV=/usr/local/ps3dev
+          export PSL1GHT=$PS3DEV/psl1ght
+          export PORTLIBS=$PS3DEV/portlibs/ppu
+          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
+
+          SSL_LIBS=""
+          if [ -f "$PORTLIBS/lib/libmbedtls.a" ]; then
+            SSL_LIBS="-lmbedtls -lmbedx509 -lmbedcrypto"
+          elif [ -f "$PORTLIBS/lib/libpolarssl.a" ]; then
+            SSL_LIBS="-lpolarssl"
+          elif [ -f "$PORTLIBS/lib/libwolfssl.a" ]; then
+            SSL_LIBS="-lwolfssl"
+          fi
+
+          FF_LIBS=""
+          [ -f "$PORTLIBS/lib/libavformat.a" ] && FF_LIBS="$FF_LIBS -lavformat"
+          [ -f "$PORTLIBS/lib/libavcodec.a" ] && FF_LIBS="$FF_LIBS -lavcodec"
+          [ -f "$PORTLIBS/lib/libswscale.a" ] && FF_LIBS="$FF_LIBS -lswscale"
+          [ -f "$PORTLIBS/lib/libswresample.a" ] && FF_LIBS="$FF_LIBS -lswresample"
+          [ -f "$PORTLIBS/lib/libavutil.a" ] && FF_LIBS="$FF_LIBS -lavutil"
+
+          make EXTRA_LIBS="$SSL_LIBS $FF_LIBS" pkg
 
       - name: Upload RAFSTREAM_PS3.pkg Artifact
         uses: actions/upload-artifact@v4
