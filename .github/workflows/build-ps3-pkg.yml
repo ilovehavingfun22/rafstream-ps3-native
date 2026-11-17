@@ -306,18 +306,19 @@ jobs:
               struct.pack(">IIQ", 3, 8, installed_size) +
               struct.pack(">IIQ", 4, 8, 0)
           )
+          data_offset = 0xC0 + len(meta)
+          total_size = data_offset + len(enc_data) + 0x20
           pkg_hdr = struct.pack(
               ">4sHHIIIIQQ48s16s16s",
-              b"\x7fPKG", 0x8000, 0x0001, 0xC0, 4, 0xC0,
-              len(items), 0xC0 + len(enc_data) + 0x20, 0xC0, len(enc_data),
+              b"\x7fPKG", 0x0000, 0x0001, 0xC0, 4, len(meta),
+              len(items), total_size, data_offset, len(enc_data),
               cid, qa_digest, iv
-          )
+          ) + (b"\x00" * 64)
           body = pkg_hdr + meta + enc_data
           footer = hashlib.sha1(body).digest() + (b"\x00" * 12)
           with open("RAFSTREAM_PS3.pkg", "wb") as out_f:
               out_f.write(body + footer)
           PYEOF
-          sed -i 's/^          //' build/make_pkg.py
           python3 build/make_pkg.py
           ls -lh RAFSTREAM_PS3.pkg
 
