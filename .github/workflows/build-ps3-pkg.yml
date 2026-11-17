@@ -17,7 +17,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /usr/local/ps3dev
-          key: ps3dev-prebuilt-v4
+          key: ps3dev-prebuilt-v5
 
       - name: Setup PS3DEV & PSL1GHT Toolchain
         run: |
@@ -42,19 +42,17 @@ jobs:
             chmod +x ./prepare.sh ./build-all.sh ./scripts/*.sh
             ./prepare.sh || true
 
-            # 1. Build Compiler PPU & SPU
-            CFLAGS="-O2 -std=gnu11 -Wno-error" CXXFLAGS="-O2 -std=gnu++14 -Wno-error" ./scripts/001-toolchain.sh
+            for s in ./scripts/002-*.sh ./scripts/003-*.sh; do
+              [ -f "$s" ] && sed -i '2i unset CFLAGS CXXFLAGS' "$s"
+            done
 
-            # 2. Build PSL1GHT SDK (tanpa CFLAGS global agar Makefile tidak tertimpa)
-            unset CFLAGS CXXFLAGS
-            ./scripts/002-psl1ght.sh
+            for s in ./scripts/003-*.sh; do
+              [ -f "$s" ] && sed -i 's|./libraries.sh|rm -f scripts/*pthread-emb* \&\& ./libraries.sh|g' "$s"
+            done
 
-            # 3. Build ps3libraries (lewati 032-pthread-emb.sh yang tidak dipakai)
-            sed -i 's|./libraries.sh|rm -f scripts/*pthread-emb* \&\& ./libraries.sh|g' ./scripts/003-ps3libraries.sh
-            ./scripts/003-ps3libraries.sh || true
-
-            # Verifikasi library inti sudah terpasang
-            test -f "$PS3DEV/portlibs/ppu/lib/libcurl.a"
+            export CFLAGS="-O2 -std=gnu11 -Wno-error"
+            export CXXFLAGS="-O2 -std=gnu++14 -Wno-error"
+            ./build-all.sh
           fi
 
       - name: Compile EBOOT.BIN & Build RAFSTREAM_PS3.pkg
