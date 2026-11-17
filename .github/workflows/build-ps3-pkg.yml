@@ -89,6 +89,9 @@ jobs:
           #ifndef TCP_NODELAY
           #define TCP_NODELAY 1
           #endif
+          #ifndef TCP_MAXSEG
+          #define TCP_MAXSEG 2
+          #endif
           #ifndef IPPROTO_TCP
           #define IPPROTO_TCP 6
           #endif
@@ -196,20 +199,23 @@ jobs:
             -L"$PSL1GHT/ppu/lib" -L"$PORTLIBS/lib" \
             $LIBS -o rafstream_ps3.elf
 
-          cp ICON0.PNG pkg_build/ICON0.PNG
-          [ -f PIC1.PNG ] && cp PIC1.PNG pkg_build/PIC1.PNG || true
+          ICON_FILE=$(find . -maxdepth 2 -iname "ICON0.PNG" | head -n 1)
+          [ -n "$ICON_FILE" ] && cp "$ICON_FILE" pkg_build/ICON0.PNG
+          PIC_FILE=$(find . -maxdepth 2 -iname "PIC1.PNG" | head -n 1)
+          [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
           FSELF_BIN=$(find "$PS3DEV" -name "make_self_npdrm" -o -name "fself.py" | head -n 1)
           SFO_BIN=$(find "$PS3DEV" -name "sfo.py" | head -n 1)
           PKG_BIN=$(find "$PS3DEV" -name "pkg.py" | head -n 1)
+          SFO_XML=$(find . "$PS3DEV" -name "sfo.xml" | head -n 1)
 
           if [[ "$FSELF_BIN" == *.py ]]; then
-            python3 "$FSELF_BIN" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
+            python3 "$FSELF_BIN" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN || python3 "$FSELF_BIN" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           else
             "$FSELF_BIN" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN UP0001-RAFSTRM01_00-RAFSTREAMPS30001
           fi
 
-          python3 "$SFO_BIN" --title "RAFSTREAM PS3" --appid "RAFSTRM01" -f sfo.xml pkg_build/PARAM.SFO
+          python3 "$SFO_BIN" --title "RAFSTREAM PS3" --appid "RAFSTRM01" -f "$SFO_XML" pkg_build/PARAM.SFO
           python3 "$PKG_BIN" --contentid UP0001-RAFSTRM01_00-RAFSTREAMPS30001 pkg_build/ RAFSTREAM_PS3.pkg
           ls -lh RAFSTREAM_PS3.pkg
 
