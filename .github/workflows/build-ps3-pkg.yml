@@ -64,6 +64,78 @@ jobs:
           path: /usr/local/ps3dev
           key: ps3dev-prebuilt-v5
 
+      - name: Restore Cached FFmpeg Portlib
+        id: cache-ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          path: /usr/local/ps3dev/portlibs/ppu
+          key: ps3dev-ffmpeg-v1
+
+      - name: Build FFmpeg for PS3 (PPU)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          export PS3DEV=/usr/local/ps3dev
+          export PSL1GHT=$PS3DEV/psl1ght
+          export PORTLIBS=$PS3DEV/portlibs/ppu
+          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
+
+          if [ ! -f "$PORTLIBS/include/libavformat/avformat.h" ]; then
+            rm -rf /tmp/ffmpeg*
+            if curl -fSL https://ffmpeg.org/releases/ffmpeg-4.2.9.tar.xz -o /tmp/ffmpeg.tar.xz; then
+              mkdir -p /tmp/ffmpeg
+              tar -xaf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1
+            else
+              git clone --depth 1 --branch n4.2.9 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
+            fi
+
+            cd /tmp/ffmpeg
+            COMMON_FLAGS="--prefix=$PORTLIBS \
+              --enable-cross-compile \
+              --cross-prefix=powerpc64-ps3-elf- \
+              --arch=powerpc64 \
+              --cpu=cell \
+              --target-os=none \
+              --enable-static \
+              --disable-shared \
+              --disable-programs \
+              --disable-doc \
+              --disable-avdevice \
+              --disable-postproc \
+              --disable-avfilter \
+              --disable-encoders \
+              --disable-muxers \
+              --disable-devices \
+              --disable-pthreads \
+              --disable-w32threads \
+              --disable-os2threads \
+              --disable-altivec \
+              --disable-vsx \
+              --disable-asm \
+              --enable-zlib"
+
+            EXTRA_CF="-O2 -I$PSL1GHT/ppu/include -I$PORTLIBS/include"
+            EXTRA_LF="-L$PSL1GHT/ppu/lib -L$PORTLIBS/lib"
+
+            if [ -f "$PORTLIBS/lib/libmbedtls.a" ] && ./configure $COMMON_FLAGS --enable-network --enable-mbedtls --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lmbedtls -lmbedx509 -lmbedcrypto -lnet -lsysmodule -lz -lm"; then
+              echo "Configured FFmpeg with mbedTLS + network"
+            elif ./configure $COMMON_FLAGS --enable-network --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lnet -lsysmodule -lz -lm"; then
+              echo "Configured FFmpeg with network"
+            else
+              ./configure $COMMON_FLAGS --disable-network --extra-cflags="$EXTRA_CF" --extra-ldflags="$EXTRA_LF" --extra-libs="-lz -lm"
+            fi
+
+            make -j$(nproc)
+            make install
+          fi
+
+      - name: Save FFmpeg Portlib Cache
+        if: always() && steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /usr/local/ps3dev/portlibs/ppu
+          key: ps3dev-ffmpeg-v1
+
       - name: Compile EBOOT.BIN & Build RAFSTREAM_PS3.pkg
         run: |
           set -e
@@ -72,21 +144,12 @@ jobs:
           export PORTLIBS=$PS3DEV/portlibs/ppu
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
 
-          if [ ! -f "$PORTLIBS/include/libswresample/swresample.h" ]; then
-            python3 -c '
-          import re
-          s = open("source/player.c").read()
-          s = s.replace("#include <libswresample/swresample.h>", "")
-          s = s.replace("SwrContext *swr = NULL;", "void *swr = NULL;")
-          s = re.sub(r"swr\s*=\s*swr_alloc_set_opts\([^;]*\);", "swr = NULL;", s, flags=re.S)
-          s = s.replace("swr_init(swr)", "-1")
-          s = re.sub(r"swr_convert\([^;]*\)", "0", s, flags=re.S)
-          s = s.replace("swr_free(&swr);", "")
-          open("source/player.c", "w").write(s)
-          '
-          fi
-
           LIBS="-ltiny3d -lrsx -lgcm_sys -ljpgdec -lpngdec -lcurl"
+          [ -f "$PORTLIBS/lib/libavformat.a" ] && LIBS="$LIBS -lavformat"
+          [ -f "$PORTLIBS/lib/libavcodec.a" ] && LIBS="$LIBS -lavcodec"
+          [ -f "$PORTLIBS/lib/libswscale.a" ] && LIBS="$LIBS -lswscale"
+          [ -f "$PORTLIBS/lib/libswresample.a" ] && LIBS="$LIBS -lswresample"
+          [ -f "$PORTLIBS/lib/libavutil.a" ] && LIBS="$LIBS -lavutil"
           if [ -f "$PORTLIBS/lib/libmbedtls.a" ]; then
             LIBS="$LIBS -lmbedtls -lmbedx509 -lmbedcrypto"
           elif [ -f "$PORTLIBS/lib/libpolarssl.a" ]; then
@@ -94,11 +157,6 @@ jobs:
           elif [ -f "$PORTLIBS/lib/libwolfssl.a" ]; then
             LIBS="$LIBS -lwolfssl"
           fi
-          [ -f "$PORTLIBS/lib/libavformat.a" ] && LIBS="$LIBS -lavformat"
-          [ -f "$PORTLIBS/lib/libavcodec.a" ] && LIBS="$LIBS -lavcodec"
-          [ -f "$PORTLIBS/lib/libswscale.a" ] && LIBS="$LIBS -lswscale"
-          [ -f "$PORTLIBS/lib/libswresample.a" ] && LIBS="$LIBS -lswresample"
-          [ -f "$PORTLIBS/lib/libavutil.a" ] && LIBS="$LIBS -lavutil"
           LIBS="$LIBS -lz -laudio -lnet"
           [ -f "$PSL1GHT/ppu/lib/libnetctl.a" ] && LIBS="$LIBS -lnetctl"
           LIBS="$LIBS -lio -lsysutil -lsysmodule"
