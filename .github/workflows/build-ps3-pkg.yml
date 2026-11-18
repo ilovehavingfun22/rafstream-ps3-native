@@ -203,25 +203,33 @@ jobs:
             python3 "$FSELF_PY" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN || python3 "$FSELF_PY" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           fi
 
-          # Ambil tools/ps3py resmi dari repositori PSL1GHT
+          # Cari sfo.xml di repo atau buat otomatis jika tidak ada
+          SFO_XML=$(find . -maxdepth 2 -name "sfo.xml" | head -n 1)
+          if [ -z "$SFO_XML" ]; then
+            printf '<?xml version="1.0" encoding="UTF-8"?>\n<sfo>\n  <value name="APP_VER" type="string" max_len="8">01.00</value>\n  <value name="ATTRIBUTE" type="integer">0</value>\n  <value name="BOOTABLE" type="integer">1</value>\n  <value name="CATEGORY" type="string" max_len="4">HG</value>\n  <value name="LICENSE" type="string" max_len="512">RAFSTREAM PS3</value>\n  <value name="PARENTAL_LEVEL" type="integer">1</value>\n  <value name="PS3_SYSTEM_VER" type="string" max_len="8">03.4000</value>\n  <value name="RESOLUTION" type="integer">63</value>\n  <value name="SOUND_FORMAT" type="integer">1</value>\n  <value name="VERSION" type="string" max_len="8">01.00</value>\n</sfo>\n' > /tmp/sfo.xml
+            SFO_XML="/tmp/sfo.xml"
+          fi
+
+          # Coba kemas memakai PSL1GHT ps3py resmi
           rm -rf /tmp/psl1ght_tools
           git clone --depth 1 --filter=blob:none --sparse https://github.com/ps3dev/PSL1GHT.git /tmp/psl1ght_tools || true
           git -C /tmp/psl1ght_tools sparse-checkout set tools/ps3py || true
 
           if [ -f "/tmp/psl1ght_tools/tools/ps3py/pkg.py" ] && [ -f "/tmp/psl1ght_tools/tools/ps3py/sfo.py" ]; then
-            echo "Packaging with official PSL1GHT ps3py..."
-            python3 /tmp/psl1ght_tools/tools/ps3py/sfo.py \
+            make -C /tmp/psl1ght_tools/tools/ps3py || true
+            PYTHONPATH=/tmp/psl1ght_tools/tools/ps3py python3 /tmp/psl1ght_tools/tools/ps3py/sfo.py \
               --title "RAFSTREAM PS3" \
               --appid "RAFSTRM01" \
-              -f /tmp/psl1ght_tools/tools/ps3py/sfo.xml \
-              pkg_build/PARAM.SFO
-            python3 /tmp/psl1ght_tools/tools/ps3py/pkg.py \
+              -f "$SFO_XML" \
+              pkg_build/PARAM.SFO || true
+            PYTHONPATH=/tmp/psl1ght_tools/tools/ps3py python3 /tmp/psl1ght_tools/tools/ps3py/pkg.py \
               --contentid UP0001-RAFSTRM01_00-RAFSTREAMPS30001 \
-              pkg_build/ RAFSTREAM_PS3.pkg
+              pkg_build/ RAFSTREAM_PS3.pkg || true
           fi
 
+          # Cadangan otomatis jika ps3py tidak menghasilkan file
           if [ ! -s "RAFSTREAM_PS3.pkg" ]; then
-            echo "Fallback to built-in PS3 Debug PKG packer..."
+            echo "Packaging with built-in PS3 Debug PKG packer..."
             cat << 'PYEOF' > build/make_pkg.py
           import os, struct, hashlib
 
