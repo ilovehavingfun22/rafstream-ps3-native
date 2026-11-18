@@ -194,16 +194,15 @@ jobs:
           PIC_FILE=$(find . -maxdepth 2 -iname "PIC1.PNG" | head -n 1)
           [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
-          if command -v make_self_npdrm >/dev/null 2>&1; then
-            make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN UP0001-RAFSTRM01_00-RAFSTREAMPS30001
+          FSELF_PY=$(find "$PS3DEV" -name "fself.py" | head -n 1)
+          if [ -n "$FSELF_PY" ]; then
+            python3 "$FSELF_PY" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           elif command -v make_fself >/dev/null 2>&1; then
             make_fself rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           else
-            FSELF_PY=$(find "$PS3DEV" -name "fself.py" | head -n 1)
-            python3 "$FSELF_PY" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN || python3 "$FSELF_PY" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
+            make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN UP0001-RAFSTRM01_00-RAFSTREAMPS30001
           fi
 
-          # 1. Buat pkg_build/PARAM.SFO yang valid untuk PS3 XMB
           cat << 'PYEOF' > build/make_sfo.py
           import struct
 
@@ -244,7 +243,6 @@ jobs:
           python3 build/make_sfo.py
           test -s pkg_build/PARAM.SFO
 
-          # 2. Kemas dengan PSL1GHT ps3py/pkg.py resmi (AES-128-CTR)
           rm -rf /tmp/psl1ght_tools
           git clone --depth 1 --filter=blob:none --sparse https://github.com/ps3dev/PSL1GHT.git /tmp/psl1ght_tools
           git -C /tmp/psl1ght_tools sparse-checkout set tools/ps3py
