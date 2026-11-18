@@ -151,16 +151,9 @@ jobs:
           export PORTLIBS=$PS3DEV/portlibs/ppu
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
 
-          # Gunakan specs / linker script resmi PSL1GHT LV2 agar format ELF valid untuk PS3 & RPCS3
-          SPEC_FLAG="-B$PSL1GHT/ppu/lib/"
-          if [ -f "$PSL1GHT/ppu/lib/specs" ]; then
-            SPEC_FLAG="-B$PSL1GHT/ppu/lib/ -specs=$PSL1GHT/ppu/lib/specs"
-          elif [ -f "$PSL1GHT/ppu/lib/lv2.ld" ]; then
-            SPEC_FLAG="-B$PSL1GHT/ppu/lib/ -T$PSL1GHT/ppu/lib/lv2.ld"
-          fi
-          echo "Using PSL1GHT linker flags: $SPEC_FLAG"
-
-          MACHDEP="-mcpu=cell -mhard-float -ffunction-sections -fdata-sections $SPEC_FLAG"
+          PPU_RULES=$(find "$PSL1GHT" -maxdepth 2 -name "ppu_rules" | head -n 1)
+          echo "Using official PSL1GHT ppu_rules: $PPU_RULES"
+          test -n "$PPU_RULES"
 
           LIBS="-ltiny3d -lrsx -lgcm_sys -ljpgdec -lpngdec -lcurl"
           [ -f "$PORTLIBS/lib/libavformat.a" ] && LIBS="$LIBS -lavformat"
@@ -183,43 +176,47 @@ jobs:
           LIBS="$LIBS -lm"
 
           rm -rf build pkg_build rafstream_ps3.elf RAFSTREAM_PS3.pkg
-          mkdir -p build pkg_build/USRDIR
+          mkdir -p pkg_build/USRDIR
 
-          printf '#include <stddef.h>\n#include <string.h>\nint gethostname(char *name, size_t len) {\n  if (name && len > 0) {\n    strncpy(name, "ps3", len - 1);\n    name[len - 1] = 0;\n  }\n  return 0;\n}\n' > build/ps3_compat.c
-          powerpc64-ps3-elf-gcc $MACHDEP -O2 -c build/ps3_compat.c -o build/ps3_compat.o
+          printf '#include <stddef.h>\n#include <string.h>\nint gethostname(char *name, size_t len) {\n  if (name && len > 0) {\n    strncpy(name, "ps3", len - 1);\n    name[len - 1] = 0;\n  }\n  return 0;\n}\n' > source/ps3_compat.c
 
-          for src in source/*.c; do
-            obj="build/$(basename "${src%.c}.o")"
-            echo "Compiling $src -> $obj"
-            powerpc64-ps3-elf-gcc $MACHDEP -O2 -Wall -Iinclude -Isource \
-              -I"$PSL1GHT/ppu/include" -I"$PORTLIBS/include" \
-              -c "$src" -o "$obj"
-          done
+          # Buat Makefile PSL1GHT dengan tab asli (0x09) agar ppu_rules menghasilkan LV2 ELF valid
+          printf '.SUFFIXES:\n' > Makefile.ps3
+          printf 'include %s\n\n' "$PPU_RULES" >> Makefile.ps3
+          printf 'TARGET   := rafstream_ps3\n' >> Makefile.ps3
+          printf 'BUILD    := build\n' >> Makefile.ps3
+          printf 'SOURCES  := source\n' >> Makefile.ps3
+          printf 'INCLUDES := include source\n\n' >> Makefile.ps3
+          printf 'CFLAGS   := -O2 -Wall $(MACHDEP) $(INCLUDE)\n' >> Makefile.ps3
+          printf 'CXXFLAGS := $(CFLAGS)\n' >> Makefile.ps3
+          printf 'LDFLAGS  := $(MACHDEP) -Wl,-Map,$(notdir $@).map\n' >> Makefile.ps3
+          printf 'LIBS     := %s\n\n' "$LIBS" >> Makefile.ps3
+          printf 'CFILES   := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))\n' >> Makefile.ps3
+          printf 'OFILES   := $(CFILES:.c=.o)\n' >> Makefile.ps3
+          printf 'export OUTPUT   := $(CURDIR)/$(TARGET)\n' >> Makefile.ps3
+          printf 'export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))\n' >> Makefile.ps3
+          printf 'export DEPSDIR  := $(CURDIR)/$(BUILD)\n' >> Makefile.ps3
+          printf 'export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) $(LIBDIRS:-L%%=-I%%)\n\n' >> Makefile.ps3
+          printf 'all: $(BUILD) $(OUTPUT).elf\n\n' >> Makefile.ps3
+          printf '$(BUILD):\n\t@[ -d $@ ] || mkdir -p $@\n\n' >> Makefile.ps3
+          printf '$(OUTPUT).elf: $(addprefix $(BUILD)/,$(OFILES))\n\t@echo linking $(notdir $@)\n\t@$(LD) $(LDFLAGS) $(addprefix $(BUILD)/,$(OFILES)) $(LIBPATHS) $(LIBS) -o $@\n\n' >> Makefile.ps3
+          printf '$(BUILD)/%%.o: %%.c\n\t@echo compiling $(notdir $<)\n\t@$(CC) $(CFLAGS) -c $< -o $@\n' >> Makefile.ps3
 
-          echo "Linking rafstream_ps3.elf..."
-          powerpc64-ps3-elf-gcc $MACHDEP build/*.o \
-            -L"$PSL1GHT/ppu/lib" -L"$PORTLIBS/lib" \
-            -Wl,--gc-sections \
-            $LIBS -o rafstream_ps3.elf
+          make -f Makefile.ps3 -j$(nproc)
+          rm -f source/ps3_compat.c Makefile.ps3
 
+          echo "Verifying PS3 LV2 ELF program headers..."
           powerpc64-ps3-elf-readelf -h -l rafstream_ps3.elf
+          powerpc64-ps3-elf-readelf -l rafstream_ps3.elf | grep -E "PROC_PARAM|0x60000001"
 
           ICON_FILE=$(find . -maxdepth 2 -iname "ICON0.PNG" | head -n 1)
           [ -n "$ICON_FILE" ] && cp "$ICON_FILE" pkg_build/ICON0.PNG
           PIC_FILE=$(find . -maxdepth 2 -iname "PIC1.PNG" | head -n 1)
           [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
-          # Gunakan Free Homebrew NPDRM ContentID (HB0001-) seperti Yo! Player
+          # Tandatangani EBOOT.BIN identik dengan struktur Free Homebrew NPDRM Yo! Player
           CONTENT_ID="HB0001-RAFSTRM01_00-RAFSTREAMPS30001"
-          if command -v make_self_npdrm >/dev/null 2>&1; then
-            echo "Signing EBOOT.BIN with make_self_npdrm ($CONTENT_ID)..."
-            make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN "$CONTENT_ID"
-          elif command -v make_fself >/dev/null 2>&1; then
-            make_fself rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
-          else
-            FSELF_PY=$(find "$PS3DEV" -name "fself.py" | head -n 1)
-            python3 "$FSELF_PY" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
-          fi
+          make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN "$CONTENT_ID"
           test -s pkg_build/USRDIR/EBOOT.BIN
 
           cat << 'PYEOF' > build/make_sfo.py
