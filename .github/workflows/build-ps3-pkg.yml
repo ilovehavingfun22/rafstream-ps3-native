@@ -194,14 +194,15 @@ jobs:
           PIC_FILE=$(find . -maxdepth 2 -iname "PIC1.PNG" | head -n 1)
           [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
-          FSELF_PY=$(find "$PS3DEV" -name "fself.py" | head -n 1)
-          if [ -n "$FSELF_PY" ]; then
-            python3 "$FSELF_PY" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
-          elif command -v make_fself >/dev/null 2>&1; then
-            make_fself rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
-          else
+          if command -v make_self_npdrm >/dev/null 2>&1; then
             make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN UP0001-RAFSTRM01_00-RAFSTREAMPS30001
+          elif command -v make_self >/dev/null 2>&1; then
+            make_self rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
+          else
+            FSELF_PY=$(find "$PS3DEV" -name "fself.py" | head -n 1)
+            python3 "$FSELF_PY" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           fi
+          test -s pkg_build/USRDIR/EBOOT.BIN
 
           cat << 'PYEOF' > build/make_sfo.py
           import struct
