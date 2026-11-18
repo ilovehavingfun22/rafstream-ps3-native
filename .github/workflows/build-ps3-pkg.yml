@@ -151,6 +151,8 @@ jobs:
           export PORTLIBS=$PS3DEV/portlibs/ppu
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
 
+          MACHDEP="-mcpu=cell -mhard-float -ffunction-sections -fdata-sections -B$PSL1GHT/ppu/lib"
+
           LIBS="-ltiny3d -lrsx -lgcm_sys -ljpgdec -lpngdec -lcurl"
           [ -f "$PORTLIBS/lib/libavformat.a" ] && LIBS="$LIBS -lavformat"
           [ -f "$PORTLIBS/lib/libavcodec.a" ] && LIBS="$LIBS -lavcodec"
@@ -174,33 +176,40 @@ jobs:
           mkdir -p build pkg_build/USRDIR
 
           printf '#include <stddef.h>\n#include <string.h>\nint gethostname(char *name, size_t len) {\n  if (name && len > 0) {\n    strncpy(name, "ps3", len - 1);\n    name[len - 1] = 0;\n  }\n  return 0;\n}\n' > build/ps3_compat.c
-          powerpc64-ps3-elf-gcc -O2 -c build/ps3_compat.c -o build/ps3_compat.o
+          powerpc64-ps3-elf-gcc $MACHDEP -O2 -c build/ps3_compat.c -o build/ps3_compat.o
 
           for src in source/*.c; do
             obj="build/$(basename "${src%.c}.o")"
             echo "Compiling $src -> $obj"
-            powerpc64-ps3-elf-gcc -O2 -Wall -Iinclude -Isource \
+            powerpc64-ps3-elf-gcc $MACHDEP -O2 -Wall -Iinclude -Isource \
               -I"$PSL1GHT/ppu/include" -I"$PORTLIBS/include" \
               -c "$src" -o "$obj"
           done
 
-          echo "Linking rafstream_ps3.elf"
-          powerpc64-ps3-elf-gcc build/*.o \
+          echo "Linking rafstream_ps3.elf with PSL1GHT LV2 runtime..."
+          powerpc64-ps3-elf-gcc $MACHDEP build/*.o \
             -L"$PSL1GHT/ppu/lib" -L"$PORTLIBS/lib" \
+            -Wl,--gc-sections \
             $LIBS -o rafstream_ps3.elf
+
+          powerpc64-ps3-elf-readelf -l rafstream_ps3.elf
 
           ICON_FILE=$(find . -maxdepth 2 -iname "ICON0.PNG" | head -n 1)
           [ -n "$ICON_FILE" ] && cp "$ICON_FILE" pkg_build/ICON0.PNG
           PIC_FILE=$(find . -maxdepth 2 -iname "PIC1.PNG" | head -n 1)
           [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
-          if command -v make_self_npdrm >/dev/null 2>&1; then
-            make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN UP0001-RAFSTRM01_00-RAFSTREAMPS30001
+          # Buat Fake SELF (FSELF) standar homebrew PS3/RPCS3 (bukan NPDRM)
+          if command -v make_fself >/dev/null 2>&1; then
+            echo "Signing EBOOT.BIN with make_fself..."
+            make_fself rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           elif command -v make_self >/dev/null 2>&1; then
+            echo "Signing EBOOT.BIN with make_self..."
             make_self rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           else
-            FSELF_PY=$(find "$PS3DEV" -name "fself.py" | head -n 1)
-            python3 "$FSELF_PY" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
+            echo "ERROR: Neither make_fself nor make_self found in $PS3DEV/bin!"
+            ls -la "$PS3DEV/bin"
+            exit 1
           fi
           test -s pkg_build/USRDIR/EBOOT.BIN
 
