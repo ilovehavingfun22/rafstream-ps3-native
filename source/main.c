@@ -7,14 +7,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/process.h>
 #include <io/pad.h>
 #include <net/net.h>
+#include <net/netctl.h>
 #include <sysmodule/sysmodule.h>
-#include <sysutil/osk.h>
 #include <audio/audio.h>
 #include <curl/curl.h>
 #include <libavformat/avformat.h>
 #include <tiny3d.h>
+
+/* Alokasikan 1 MB stack untuk thread utama PPU PS3 agar tidak stack overflow */
+SYS_PROCESS_PARAM(1001, 0x100000);
 
 /* Bitmap font 8x8 bawaan agar teks tajam tanpa tergantung file .ttf eksternal */
 static const uint8_t FONT8X8[96][8] = {
@@ -68,6 +72,32 @@ static const uint8_t FONT8X8[96][8] = {
     {0x6E,0x3B,0x00,0x00,0x00,0x00,0x00,0x00},{0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}
 };
 
+/* Simpan di BSS (RAM utama), bukan di stack */
+static MediaItem items[MAX_ITEMS];
+static EpisodeItem episodes[MAX_EPISODES];
+
+enum {
+    PAD_BIT_SELECT   = (1 << 0),
+    PAD_BIT_START    = (1 << 3),
+    PAD_BIT_UP       = (1 << 4),
+    PAD_BIT_RIGHT    = (1 << 5),
+    PAD_BIT_DOWN     = (1 << 6),
+    PAD_BIT_LEFT     = (1 << 7),
+    PAD_BIT_L2       = (1 << 8),
+    PAD_BIT_R2       = (1 << 9),
+    PAD_BIT_L1       = (1 << 10),
+    PAD_BIT_R1       = (1 << 11),
+    PAD_BIT_TRIANGLE = (1 << 12),
+    PAD_BIT_CIRCLE   = (1 << 13),
+    PAD_BIT_CROSS    = (1 << 14),
+    PAD_BIT_SQUARE   = (1 << 15)
+};
+
+static void begin_frame_2d(u32 clear_color) {
+    tiny3d_Clear(clear_color, TINY3D_CLEAR_ALL);
+    tiny3d_Project2D();
+}
+
 static void draw_rect(float x, float y, float w, float h, u32 color) {
     tiny3d_SetPolygon(TINY3D_QUADS);
     tiny3d_VertexPos(x, y, 0.0f);
@@ -108,22 +138,30 @@ int main(int argc, const char *argv[]) {
     (void)argc;
     (void)argv;
 
+    sysModuleLoad(SYSMODULE_FS);
+    sysModuleLoad(SYSMODULE_IO);
     sysModuleLoad(SYSMODULE_NET);
+    sysModuleLoad(SYSMODULE_NETCTL);
     sysModuleLoad(SYSMODULE_JPGDEC);
+    sysModuleLoad(SYSMODULE_PNGDEC);
+
+    tiny3d_Init(1024 * 1024);
+
+    /* Tampilkan splash loading segera agar layar langsung menyala */
+    begin_frame_2d(0xFF0B0B0F);
+    draw_text(40.0f, 36.0f, 2.2f, 0xFFE50914, "RAFSTREAM PS3 NATIVE");
+    draw_text(40.0f, 80.0f, 1.5f, 0xFFFFFFFF, "Menyiapkan jaringan PS3 & decoder...");
+    tiny3d_Flip();
+
     netInitialize();
+    netCtlInit();
     audioInit();
     ioPadInit(7);
     curl_global_init(CURL_GLOBAL_ALL);
     avformat_network_init();
 
-    tiny3d_Init(1024 * 1024);
-    tiny3d_Project2D();
-
-    MediaItem items[MAX_ITEMS];
-    EpisodeItem episodes[MAX_EPISODES];
     int item_count = 0;
     int ep_count = 0;
-
     int cat_idx = 0;
     int page = 1;
     int sel_idx = 0;
@@ -133,16 +171,17 @@ int main(int argc, const char *argv[]) {
     char status_msg[160] = "Menghubungkan ke server Vercel RAFSTREAM...";
     char search_query[64] = "";
 
-    /* Muat katalog awal */
-    tiny3d_Clear(0xFF0B0B0F, TINY3D_CLEAR_ALL);
+    begin_frame_2d(0xFF0B0B0F);
     draw_text(40.0f, 36.0f, 2.2f, 0xFFE50914, "RAFSTREAM PS3 NATIVE");
     draw_text(40.0f, 80.0f, 1.5f, 0xFFFFFFFF, status_msg);
     tiny3d_Flip();
 
     item_count = api_fetch_catalog(CAT_KEYS[cat_idx], search_query, page, items, 8);
     if (item_count < 0) {
-        snprintf(status_msg, sizeof(status_msg), "Gagal terhubung ke Vercel (kode %d). Tekan [Select] untuk coba lagi.", item_count);
+        snprintf(status_msg, sizeof(status_msg), "Gagal terhubung ke server (kode %d). Tekan [Select] untuk coba lagi.", item_count);
         item_count = 0;
+    } else if (item_count == 0) {
+        snprintf(status_msg, sizeof(status_msg), "Katalog kosong. Tekan [R1] ganti kategori atau [Select] muat ulang.");
     } else {
         snprintf(status_msg, sizeof(status_msg), "D-Pad: Navigasi | [X]: Pilih/Play | [O]: Kembali | [L1/R1]: Kategori");
         for (int i = 0; i < item_count; i++) {
@@ -158,70 +197,82 @@ int main(int argc, const char *argv[]) {
         ioPadGetInfo(&padinfo);
         if (padinfo.status[0]) {
             ioPadGetData(0, &paddata);
-            u32 btn = paddata.button[2];
+
+            u32 btn = 0;
+            if (paddata.BTN_SELECT)   btn |= PAD_BIT_SELECT;
+            if (paddata.BTN_START)    btn |= PAD_BIT_START;
+            if (paddata.BTN_UP)       btn |= PAD_BIT_UP;
+            if (paddata.BTN_RIGHT)    btn |= PAD_BIT_RIGHT;
+            if (paddata.BTN_DOWN)     btn |= PAD_BIT_DOWN;
+            if (paddata.BTN_LEFT)     btn |= PAD_BIT_LEFT;
+            if (paddata.BTN_L2)       btn |= PAD_BIT_L2;
+            if (paddata.BTN_R2)       btn |= PAD_BIT_R2;
+            if (paddata.BTN_L1)       btn |= PAD_BIT_L1;
+            if (paddata.BTN_R1)       btn |= PAD_BIT_R1;
+            if (paddata.BTN_TRIANGLE) btn |= PAD_BIT_TRIANGLE;
+            if (paddata.BTN_CIRCLE)   btn |= PAD_BIT_CIRCLE;
+            if (paddata.BTN_CROSS)    btn |= PAD_BIT_CROSS;
+            if (paddata.BTN_SQUARE)   btn |= PAD_BIT_SQUARE;
+
             u32 pressed = btn & ~prev_btn;
             prev_btn = btn;
 
             if (view_mode == 0) {
                 /* Navigasi Grid 4x2 */
-                if (paddata.BTN_RIGHT && (pressed & 0x20)) {
-                    if (sel_idx + 1 < item_count) sel_idx++;
-                }
-                if (paddata.BTN_LEFT && (pressed & 0x80)) {
-                    if (sel_idx > 0) sel_idx--;
-                }
-                if (paddata.BTN_DOWN && (pressed & 0x40)) {
-                    if (sel_idx + 4 < item_count) sel_idx += 4;
-                }
-                if (paddata.BTN_UP && (pressed & 0x10)) {
-                    if (sel_idx - 4 >= 0) sel_idx -= 4;
-                }
+                if ((pressed & PAD_BIT_RIGHT) && sel_idx + 1 < item_count) sel_idx++;
+                if ((pressed & PAD_BIT_LEFT)  && sel_idx > 0) sel_idx--;
+                if ((pressed & PAD_BIT_DOWN)  && sel_idx + 4 < item_count) sel_idx += 4;
+                if ((pressed & PAD_BIT_UP)    && sel_idx - 4 >= 0) sel_idx -= 4;
 
                 /* L1 / R1 Ganti Kategori */
                 int reload = 0;
-                if (paddata.BTN_R1 && (pressed & 0x0800)) {
+                if (pressed & PAD_BIT_R1) {
                     cat_idx = (cat_idx + 1) % NUM_CATS;
                     page = 1;
                     search_query[0] = '\0';
                     reload = 1;
                 }
-                if (paddata.BTN_L1 && (pressed & 0x0400)) {
+                if (pressed & PAD_BIT_L1) {
                     cat_idx = (cat_idx - 1 + NUM_CATS) % NUM_CATS;
                     page = 1;
                     search_query[0] = '\0';
                     reload = 1;
                 }
                 /* R2 / L2 Ganti Halaman */
-                if (paddata.BTN_R2 && (pressed & 0x0200)) {
+                if (pressed & PAD_BIT_R2) {
                     page++;
                     reload = 1;
                 }
-                if (paddata.BTN_L2 && (pressed & 0x0100) && page > 1) {
+                if ((pressed & PAD_BIT_L2) && page > 1) {
                     page--;
                     reload = 1;
                 }
                 /* Select: Refresh */
-                if (paddata.BTN_SELECT && (pressed & 0x01)) {
+                if (pressed & PAD_BIT_SELECT) {
                     reload = 1;
                 }
 
                 if (reload) {
-                    strcpy(status_msg, "Memuat katalog dari Vercel...");
-                    tiny3d_Clear(0xFF0B0B0F, TINY3D_CLEAR_ALL);
+                    strcpy(status_msg, "Memuat katalog...");
+                    begin_frame_2d(0xFF0B0B0F);
                     draw_text(40.0f, 240.0f, 1.8f, 0xFFFFFFFF, status_msg);
                     tiny3d_Flip();
 
                     item_count = api_fetch_catalog(CAT_KEYS[cat_idx], search_query, page, items, 8);
-                    if (item_count < 0) item_count = 0;
-                    sel_idx = 0;
-                    for (int i = 0; i < item_count; i++) load_item_poster_texture(&items[i]);
-                    snprintf(status_msg, sizeof(status_msg), "Halaman %d | [L2/R2]: Hal | [L1/R1]: Kategori | [X]: Buka", page);
+                    if (item_count < 0) {
+                        snprintf(status_msg, sizeof(status_msg), "Gagal memuat katalog (kode %d). Tekan [Select] coba lagi.", item_count);
+                        item_count = 0;
+                    } else {
+                        sel_idx = 0;
+                        for (int i = 0; i < item_count; i++) load_item_poster_texture(&items[i]);
+                        snprintf(status_msg, sizeof(status_msg), "Halaman %d | [L2/R2]: Hal | [L1/R1]: Kategori | [X]: Buka", page);
+                    }
                 }
 
                 /* Tombol X: Buka Detail Tayangan */
-                if (paddata.BTN_CROSS && (pressed & 0x4000) && item_count > 0) {
+                if ((pressed & PAD_BIT_CROSS) && item_count > 0) {
                     strcpy(status_msg, "Mengambil detail & episode...");
-                    tiny3d_Clear(0xFF0B0B0F, TINY3D_CLEAR_ALL);
+                    begin_frame_2d(0xFF0B0B0F);
                     draw_text(40.0f, 240.0f, 1.8f, 0xFFFFFFFF, status_msg);
                     tiny3d_Flip();
 
@@ -240,30 +291,32 @@ int main(int argc, const char *argv[]) {
                 MediaItem *cur = &items[sel_idx];
                 int is_tv = (strcmp(cur->media_type, "tv") == 0);
 
-                if (paddata.BTN_CIRCLE && (pressed & 0x2000)) {
-                    view_mode = 0; /* Kembali ke grid */
+                if (pressed & PAD_BIT_CIRCLE) {
+                    view_mode = 0;
                 }
                 if (is_tv && ep_count > 0) {
-                    if (paddata.BTN_DOWN && (pressed & 0x40) && sel_ep_idx + 1 < ep_count) sel_ep_idx++;
-                    if (paddata.BTN_UP && (pressed & 0x10) && sel_ep_idx > 0) sel_ep_idx--;
-                    if (paddata.BTN_R1 && (pressed & 0x0800) && sel_season < cur->num_seasons) {
+                    if ((pressed & PAD_BIT_DOWN) && sel_ep_idx + 1 < ep_count) sel_ep_idx++;
+                    if ((pressed & PAD_BIT_UP)   && sel_ep_idx > 0) sel_ep_idx--;
+                    if ((pressed & PAD_BIT_R1)   && sel_season < cur->num_seasons) {
                         sel_season++;
                         sel_ep_idx = 0;
                         ep_count = api_fetch_episodes(cur->id, sel_season, episodes, MAX_EPISODES);
+                        if (ep_count < 0) ep_count = 0;
                     }
-                    if (paddata.BTN_L1 && (pressed & 0x0400) && sel_season > 1) {
+                    if ((pressed & PAD_BIT_L1) && sel_season > 1) {
                         sel_season--;
                         sel_ep_idx = 0;
                         ep_count = api_fetch_episodes(cur->id, sel_season, episodes, MAX_EPISODES);
+                        if (ep_count < 0) ep_count = 0;
                     }
                 }
 
-                /* Tombol X: Ekstrak Stream dari Vercel & Putar Video di PS3! */
-                if (paddata.BTN_CROSS && (pressed & 0x4000)) {
+                /* Tombol X: Ekstrak Stream & Putar Video di PS3 */
+                if (pressed & PAD_BIT_CROSS) {
                     int ep_num = (is_tv && ep_count > 0) ? episodes[sel_ep_idx].episode_number : 1;
-                    tiny3d_Clear(0xFF0B0B0F, TINY3D_CLEAR_ALL);
+                    begin_frame_2d(0xFF0B0B0F);
                     draw_text(40.0f, 220.0f, 1.8f, 0xFFE50914, "MENGAMBIL STREAM VIDEO...");
-                    draw_text(40.0f, 255.0f, 1.3f, 0xFFCCCCCC, "Menghubungi ekstraktor server Vercel...");
+                    draw_text(40.0f, 255.0f, 1.3f, 0xFFCCCCCC, "Menghubungi ekstraktor server...");
                     tiny3d_Flip();
 
                     char stream_url[1024];
@@ -283,7 +336,7 @@ int main(int argc, const char *argv[]) {
         }
 
         /* RENDER UI 720P DI RSX */
-        tiny3d_Clear(0xFF0B0B0F, TINY3D_CLEAR_ALL);
+        begin_frame_2d(0xFF0B0B0F);
 
         /* Header Bar */
         draw_rect(0.0f, 0.0f, 848.0f, 44.0f, 0xFF14141A);
@@ -347,7 +400,6 @@ int main(int argc, const char *argv[]) {
                      cur->rating, cur->year, cur->media_type);
             draw_text(46.0f, 102.0f, 1.15f, 0xFFF5C518, dmeta);
 
-            /* Tampilkan 2 baris sinopsis */
             char line1[85], line2[85];
             strncpy(line1, cur->overview, 82);
             line1[82] = '\0';
@@ -389,6 +441,7 @@ int main(int argc, const char *argv[]) {
     avformat_network_deinit();
     curl_global_cleanup();
     ioPadEnd();
+    netCtlTerm();
     netDeinitialize();
     return 0;
 }
