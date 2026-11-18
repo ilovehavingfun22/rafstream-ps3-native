@@ -151,7 +151,16 @@ jobs:
           export PORTLIBS=$PS3DEV/portlibs/ppu
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin:$PORTLIBS/bin
 
-          MACHDEP="-mcpu=cell -mhard-float -ffunction-sections -fdata-sections -B$PSL1GHT/ppu/lib"
+          # Gunakan specs / linker script resmi PSL1GHT LV2 agar format ELF valid untuk PS3 & RPCS3
+          SPEC_FLAG="-B$PSL1GHT/ppu/lib/"
+          if [ -f "$PSL1GHT/ppu/lib/specs" ]; then
+            SPEC_FLAG="-B$PSL1GHT/ppu/lib/ -specs=$PSL1GHT/ppu/lib/specs"
+          elif [ -f "$PSL1GHT/ppu/lib/lv2.ld" ]; then
+            SPEC_FLAG="-B$PSL1GHT/ppu/lib/ -T$PSL1GHT/ppu/lib/lv2.ld"
+          fi
+          echo "Using PSL1GHT linker flags: $SPEC_FLAG"
+
+          MACHDEP="-mcpu=cell -mhard-float -ffunction-sections -fdata-sections $SPEC_FLAG"
 
           LIBS="-ltiny3d -lrsx -lgcm_sys -ljpgdec -lpngdec -lcurl"
           [ -f "$PORTLIBS/lib/libavformat.a" ] && LIBS="$LIBS -lavformat"
@@ -169,6 +178,7 @@ jobs:
           LIBS="$LIBS -lz -laudio -lnet"
           [ -f "$PSL1GHT/ppu/lib/libnetctl.a" ] && LIBS="$LIBS -lnetctl"
           LIBS="$LIBS -lio -lsysutil -lsysmodule"
+          [ -f "$PSL1GHT/ppu/lib/librt.a" ] && LIBS="$LIBS -lrt"
           [ -f "$PSL1GHT/ppu/lib/liblv2.a" ] && LIBS="$LIBS -llv2"
           LIBS="$LIBS -lm"
 
@@ -186,30 +196,29 @@ jobs:
               -c "$src" -o "$obj"
           done
 
-          echo "Linking rafstream_ps3.elf with PSL1GHT LV2 runtime..."
+          echo "Linking rafstream_ps3.elf..."
           powerpc64-ps3-elf-gcc $MACHDEP build/*.o \
             -L"$PSL1GHT/ppu/lib" -L"$PORTLIBS/lib" \
             -Wl,--gc-sections \
             $LIBS -o rafstream_ps3.elf
 
-          powerpc64-ps3-elf-readelf -l rafstream_ps3.elf
+          powerpc64-ps3-elf-readelf -h -l rafstream_ps3.elf
 
           ICON_FILE=$(find . -maxdepth 2 -iname "ICON0.PNG" | head -n 1)
           [ -n "$ICON_FILE" ] && cp "$ICON_FILE" pkg_build/ICON0.PNG
           PIC_FILE=$(find . -maxdepth 2 -iname "PIC1.PNG" | head -n 1)
           [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
-          # Buat Fake SELF (FSELF) standar homebrew PS3/RPCS3 (bukan NPDRM)
-          if command -v make_fself >/dev/null 2>&1; then
-            echo "Signing EBOOT.BIN with make_fself..."
+          # Gunakan Free Homebrew NPDRM ContentID (HB0001-) seperti Yo! Player
+          CONTENT_ID="HB0001-RAFSTRM01_00-RAFSTREAMPS30001"
+          if command -v make_self_npdrm >/dev/null 2>&1; then
+            echo "Signing EBOOT.BIN with make_self_npdrm ($CONTENT_ID)..."
+            make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN "$CONTENT_ID"
+          elif command -v make_fself >/dev/null 2>&1; then
             make_fself rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
-          elif command -v make_self >/dev/null 2>&1; then
-            echo "Signing EBOOT.BIN with make_self..."
-            make_self rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           else
-            echo "ERROR: Neither make_fself nor make_self found in $PS3DEV/bin!"
-            ls -la "$PS3DEV/bin"
-            exit 1
+            FSELF_PY=$(find "$PS3DEV" -name "fself.py" | head -n 1)
+            python3 "$FSELF_PY" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           fi
           test -s pkg_build/USRDIR/EBOOT.BIN
 
@@ -221,9 +230,9 @@ jobs:
               ("ATTRIBUTE", 0x0404, struct.pack("<I", 0), 4),
               ("BOOTABLE", 0x0404, struct.pack("<I", 1), 4),
               ("CATEGORY", 0x0204, b"HG\x00", 4),
-              ("LICENSE", 0x0204, b"RAFSTREAM PS3\x00", 512),
+              ("LICENSE", 0x0204, b"RAFSTREAM PS3 Homebrew.\x00", 512),
               ("PARENTAL_LEVEL", 0x0404, struct.pack("<I", 1), 4),
-              ("PS3_SYSTEM_VER", 0x0204, b"03.4000\x00", 8),
+              ("PS3_SYSTEM_VER", 0x0204, b"04.7500\x00", 8),
               ("RESOLUTION", 0x0404, struct.pack("<I", 63), 4),
               ("SOUND_FORMAT", 0x0404, struct.pack("<I", 1), 4),
               ("TITLE", 0x0204, b"RAFSTREAM PS3\x00", 128),
@@ -258,7 +267,7 @@ jobs:
           git -C /tmp/psl1ght_tools sparse-checkout set tools/ps3py
           make -C /tmp/psl1ght_tools/tools/ps3py
           PYTHONPATH=/tmp/psl1ght_tools/tools/ps3py python3 /tmp/psl1ght_tools/tools/ps3py/pkg.py \
-            --contentid UP0001-RAFSTRM01_00-RAFSTREAMPS30001 \
+            --contentid "$CONTENT_ID" \
             pkg_build/ RAFSTREAM_PS3.pkg
 
           ls -lh pkg_build pkg_build/USRDIR RAFSTREAM_PS3.pkg
