@@ -96,6 +96,9 @@ int api_fetch_catalog(const char *category, const char *query, int page, MediaIt
     if (!root) return -2;
 
     cJSON *results = cJSON_GetObjectItemCaseSensitive(root, "results");
+    if (!results && cJSON_IsArray(root)) {
+        results = root;
+    }
     int count = 0;
     int arr_size = cJSON_GetArraySize(results);
 
@@ -251,6 +254,10 @@ void load_item_poster_texture(MediaItem *item) {
     struct MemBuf img_buf;
     img_buf.data = (char *)malloc(1);
     img_buf.size = 0;
+    if (!img_buf.data) {
+        curl_easy_cleanup(curl);
+        return;
+    }
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_mem_cb);
@@ -265,13 +272,31 @@ void load_item_poster_texture(MediaItem *item) {
 
     if (res == CURLE_OK && img_buf.size > 128) {
         jpgData jpg;
-        if (jpgLoadFromBuffer(img_buf.data, (u32)img_buf.size, &jpg) == 0 && jpg.bmp_out) {
-            u32 *tex_mem = (u32 *)tiny3d_AllocTexture(jpg.width * jpg.height * 4);
-            if (tex_mem) {
-                memcpy(tex_mem, jpg.bmp_out, jpg.width * jpg.height * 4);
-                item->tex_offset = tiny3d_TextureOffset(tex_mem);
-                item->tex_w = jpg.width;
-                item->tex_h = jpg.height;
+        memset(&jpg, 0, sizeof(jpgData));
+        if (jpgLoadFromBuffer(img_buf.data, (u32)img_buf.size, &jpg) == 0 &&
+            jpg.bmp_out && jpg.width > 0 && jpg.height > 0) {
+            u32 scale = 1;
+            while ((jpg.width / scale) > 220 || (jpg.height / scale) > 320) {
+                scale++;
+            }
+            u32 dst_w = jpg.width / scale;
+            u32 dst_h = jpg.height / scale;
+            if (dst_w > 0 && dst_h > 0) {
+                u32 *tex_mem = (u32 *)tiny3d_AllocTexture(dst_w * dst_h * 4);
+                if (tex_mem) {
+                    u32 src_stride = (jpg.pitch >= jpg.width * 4) ? (jpg.pitch / 4) : jpg.width;
+                    const u32 *src_px = (const u32 *)jpg.bmp_out;
+                    for (u32 y = 0; y < dst_h; y++) {
+                        const u32 *src_row = src_px + (y * scale) * src_stride;
+                        u32 *dst_row = tex_mem + y * dst_w;
+                        for (u32 x = 0; x < dst_w; x++) {
+                            dst_row[x] = src_row[x * scale];
+                        }
+                    }
+                    item->tex_offset = tiny3d_TextureOffset(tex_mem);
+                    item->tex_w = dst_w;
+                    item->tex_h = dst_h;
+                }
             }
             free(jpg.bmp_out);
         }
