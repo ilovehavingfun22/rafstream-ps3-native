@@ -241,13 +241,13 @@ jobs:
           with open("pkg_build/PARAM.SFO", "wb") as f:
               f.write(sfo_hdr + index_table + key_table + data_table)
 
-          # 2. Kemas PS3 Debug PKG
+          # 2. Kemas PS3 Debug PKG (standar ps3py / PSL1GHT)
           def pkg_crypt(key, iv, data):
               out = bytearray(len(data))
               iv_int = int.from_bytes(iv, "big")
               for i in range(0, len(data), 16):
                   cur_iv = ((iv_int + (i // 16)) & ((1 << 128) - 1)).to_bytes(16, "big")
-                  h = hashlib.sha1(key + cur_iv + (b"\x00" * 32)).digest()
+                  h = hashlib.sha1(key + key + cur_iv + (b"\x00" * 16)).digest()
                   chunk = data[i:i+16]
                   for j in range(len(chunk)):
                       out[i + j] = chunk[j] ^ h[j]
@@ -297,23 +297,24 @@ jobs:
           debug_key = bytes.fromhex("2E7B71D7C9C9A14EA3221F188828B8F8")
           cid = b"UP0001-RAFSTRM01_00-RAFSTREAMPS30001".ljust(48, b"\x00")
           qa_digest = hashlib.sha1(raw_data).digest()[:16]
-          iv = hashlib.sha1(debug_key + cid + qa_digest).digest()[:16]
+          iv = hashlib.sha1(qa_digest + qa_digest + (b"\x00" * 32)).digest()[:16]
           enc_data = pkg_crypt(debug_key, iv, raw_data)
 
           meta = (
-              struct.pack(">IIII", 1, 4, 1, 0) +
-              struct.pack(">IIII", 2, 4, 4, 0) +
+              struct.pack(">III", 1, 4, 1) +
+              struct.pack(">III", 2, 4, 4) +
               struct.pack(">IIQ", 3, 8, installed_size) +
               struct.pack(">IIQ", 4, 8, 0)
           )
           data_offset = 0xC0 + len(meta)
           total_size = data_offset + len(enc_data) + 0x20
-          pkg_hdr = struct.pack(
+          hdr_128 = struct.pack(
               ">4sHHIIIIQQQ48s16s16s",
               b"\x7fPKG", 0x0000, 0x0001, 0xC0, 4, len(meta),
               len(items), total_size, data_offset, len(enc_data),
               cid, qa_digest, iv
-          ) + (b"\x00" * 64)
+          )
+          pkg_hdr = hdr_128 + hashlib.sha1(hdr_128).digest() + (b"\x00" * 44)
           body = pkg_hdr + meta + enc_data
           footer = hashlib.sha1(body).digest() + (b"\x00" * 12)
           with open("RAFSTREAM_PS3.pkg", "wb") as out_f:
