@@ -309,7 +309,7 @@ jobs:
           data_offset = 0xC0 + len(meta)
           total_size = data_offset + len(enc_data) + 0x20
           pkg_hdr = struct.pack(
-              ">4sHHIIIIQQ48s16s16s",
+              ">4sHHIIIIQQQ48s16s16s",
               b"\x7fPKG", 0x0000, 0x0001, 0xC0, 4, len(meta),
               len(items), total_size, data_offset, len(enc_data),
               cid, qa_digest, iv
