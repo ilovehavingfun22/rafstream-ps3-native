@@ -17,8 +17,16 @@
 #include <libavformat/avformat.h>
 #include <tiny3d.h>
 
-/* Alokasikan 1 MB stack untuk thread utama PPU PS3 agar tidak stack overflow */
-SYS_PROCESS_PARAM(1001, 0x100000);
+/* 256 KB stack cukup karena array besar sudah di BSS, menyisakan memori 1M-page untuk RSX */
+SYS_PROCESS_PARAM(1001, 0x40000);
+
+static void boot_log(const char *msg) {
+    FILE *f = fopen("/dev_hdd0/tmp/rafstream_boot.log", "a");
+    if (f) {
+        fprintf(f, "%s\n", msg);
+        fclose(f);
+    }
+}
 
 /* Bitmap font 8x8 bawaan agar teks tajam tanpa tergantung file .ttf eksternal */
 static const uint8_t FONT8X8[96][8] = {
@@ -138,27 +146,39 @@ int main(int argc, const char *argv[]) {
     (void)argc;
     (void)argv;
 
-    sysModuleLoad(SYSMODULE_FS);
-    sysModuleLoad(SYSMODULE_IO);
+    FILE *f_reset = fopen("/dev_hdd0/tmp/rafstream_boot.log", "w");
+    if (f_reset) {
+        fprintf(f_reset, "1. main() started\n");
+        fclose(f_reset);
+    }
+
     sysModuleLoad(SYSMODULE_NET);
     sysModuleLoad(SYSMODULE_NETCTL);
     sysModuleLoad(SYSMODULE_JPGDEC);
     sysModuleLoad(SYSMODULE_PNGDEC);
+    sysModuleLoad(SYSMODULE_AUDIO);
+    boot_log("2. sysmodules loaded");
 
     tiny3d_Init(1024 * 1024);
+    boot_log("3. tiny3d initialized");
 
-    /* Tampilkan splash loading segera agar layar langsung menyala */
     begin_frame_2d(0xFF0B0B0F);
     draw_text(40.0f, 36.0f, 2.2f, 0xFFE50914, "RAFSTREAM PS3 NATIVE");
     draw_text(40.0f, 80.0f, 1.5f, 0xFFFFFFFF, "Menyiapkan jaringan PS3 & decoder...");
     tiny3d_Flip();
+    usleep(300000);
 
     netInitialize();
     netCtlInit();
+    boot_log("4. net initialized");
+
     audioInit();
     ioPadInit(7);
+    boot_log("5. audio & pad initialized");
+
     curl_global_init(CURL_GLOBAL_ALL);
     avformat_network_init();
+    boot_log("6. curl & ffmpeg net initialized");
 
     int item_count = 0;
     int ep_count = 0;
@@ -176,7 +196,10 @@ int main(int argc, const char *argv[]) {
     draw_text(40.0f, 80.0f, 1.5f, 0xFFFFFFFF, status_msg);
     tiny3d_Flip();
 
+    boot_log("7. fetching catalog...");
     item_count = api_fetch_catalog(CAT_KEYS[cat_idx], search_query, page, items, 8);
+    boot_log("8. catalog fetched");
+
     if (item_count < 0) {
         snprintf(status_msg, sizeof(status_msg), "Gagal terhubung ke server (kode %d). Tekan [Select] untuk coba lagi.", item_count);
         item_count = 0;
@@ -188,6 +211,7 @@ int main(int argc, const char *argv[]) {
             load_item_poster_texture(&items[i]);
         }
     }
+    boot_log("9. entering main UI loop");
 
     padInfo padinfo;
     padData paddata;
