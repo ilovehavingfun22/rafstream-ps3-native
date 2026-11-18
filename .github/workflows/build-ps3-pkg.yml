@@ -18,7 +18,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /usr/local/ps3dev
-          key: ps3dev-prebuilt-v5
+          key: ps3dev-prebuilt-v6
 
       - name: Setup PS3DEV & PSL1GHT Toolchain
         if: steps.cache-ps3dev.outputs.cache-hit != 'true'
@@ -49,7 +49,7 @@ jobs:
             done
 
             for s in ./scripts/003-*.sh; do
-              [ -f "$s" ] && sed -i 's|./libraries.sh|rm -f scripts/*pthread-emb* scripts/*libmikmod* scripts/*sdl* scripts/*lua* scripts/*libzip* scripts/*libxml2* scripts/*cairo* scripts/*pixman* \&\& ./libraries.sh|g' "$s"
+              [ -f "$s" ] && sed -i 's|./libraries.sh|rm -f scripts/*pthread-emb* scripts/*mikmod* scripts/*[Ss][Dd][Ll]* scripts/*lua* scripts/*zip* scripts/*xml2* scripts/*cairo* scripts/*pixman* scripts/*tiff* scripts/*webp* scripts/*ogg* scripts/*vorbis* scripts/*theora* scripts/*flac* \&\& ./libraries.sh|g' "$s"
             done
 
             export CFLAGS="-O2 -std=gnu11 -Wno-error"
@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: /usr/local/ps3dev
-          key: ps3dev-prebuilt-v5
+          key: ps3dev-prebuilt-v6
 
       - name: Restore Cached FFmpeg Portlib
         id: cache-ffmpeg
