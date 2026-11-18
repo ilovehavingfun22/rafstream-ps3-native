@@ -203,10 +203,28 @@ jobs:
             python3 "$FSELF_PY" -n rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN || python3 "$FSELF_PY" rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN
           fi
 
-          cat << 'PYEOF' > build/make_pkg.py
+          # Ambil tools/ps3py resmi dari repositori PSL1GHT
+          rm -rf /tmp/psl1ght_tools
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/ps3dev/PSL1GHT.git /tmp/psl1ght_tools || true
+          git -C /tmp/psl1ght_tools sparse-checkout set tools/ps3py || true
+
+          if [ -f "/tmp/psl1ght_tools/tools/ps3py/pkg.py" ] && [ -f "/tmp/psl1ght_tools/tools/ps3py/sfo.py" ]; then
+            echo "Packaging with official PSL1GHT ps3py..."
+            python3 /tmp/psl1ght_tools/tools/ps3py/sfo.py \
+              --title "RAFSTREAM PS3" \
+              --appid "RAFSTRM01" \
+              -f /tmp/psl1ght_tools/tools/ps3py/sfo.xml \
+              pkg_build/PARAM.SFO
+            python3 /tmp/psl1ght_tools/tools/ps3py/pkg.py \
+              --contentid UP0001-RAFSTRM01_00-RAFSTREAMPS30001 \
+              pkg_build/ RAFSTREAM_PS3.pkg
+          fi
+
+          if [ ! -s "RAFSTREAM_PS3.pkg" ]; then
+            echo "Fallback to built-in PS3 Debug PKG packer..."
+            cat << 'PYEOF' > build/make_pkg.py
           import os, struct, hashlib
 
-          # 1. Buat PARAM.SFO
           entries = [
               ("APP_VER", 0x0204, b"01.00\x00", 8),
               ("ATTRIBUTE", 0x0404, struct.pack("<I", 0), 4),
@@ -241,7 +259,6 @@ jobs:
           with open("pkg_build/PARAM.SFO", "wb") as f:
               f.write(sfo_hdr + index_table + key_table + data_table)
 
-          # 2. Kemas PS3 Debug PKG (standar ps3py / PSL1GHT)
           def pkg_crypt(key, iv, data):
               out = bytearray(len(data))
               iv_int = int.from_bytes(iv, "big")
@@ -297,7 +314,7 @@ jobs:
           debug_key = bytes.fromhex("2E7B71D7C9C9A14EA3221F188828B8F8")
           cid = b"UP0001-RAFSTRM01_00-RAFSTREAMPS30001".ljust(48, b"\x00")
           qa_digest = hashlib.sha1(raw_data).digest()[:16]
-          iv = hashlib.sha1(qa_digest + qa_digest + (b"\x00" * 32)).digest()[:16]
+          iv = hashlib.sha1(qa_digest + qa_digest).digest()[:16]
           enc_data = pkg_crypt(debug_key, iv, raw_data)
 
           meta = (
@@ -314,13 +331,15 @@ jobs:
               len(items), total_size, data_offset, len(enc_data),
               cid, qa_digest, iv
           )
-          pkg_hdr = hdr_128 + hashlib.sha1(hdr_128).digest() + (b"\x00" * 44)
+          pkg_hdr = hdr_128 + (b"\x00" * 64)
           body = pkg_hdr + meta + enc_data
           footer = hashlib.sha1(body).digest() + (b"\x00" * 12)
           with open("RAFSTREAM_PS3.pkg", "wb") as out_f:
               out_f.write(body + footer)
           PYEOF
-          python3 build/make_pkg.py
+            python3 build/make_pkg.py
+          fi
+
           ls -lh RAFSTREAM_PS3.pkg
 
       - name: Upload RAFSTREAM_PS3.pkg Artifact
