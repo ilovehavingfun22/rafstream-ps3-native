@@ -180,14 +180,13 @@ jobs:
 
           printf '#include <stddef.h>\n#include <string.h>\nint gethostname(char *name, size_t len) {\n  if (name && len > 0) {\n    strncpy(name, "ps3", len - 1);\n    name[len - 1] = 0;\n  }\n  return 0;\n}\n' > source/ps3_compat.c
 
-          # Buat Makefile PSL1GHT dengan tab asli (0x09) agar ppu_rules menghasilkan LV2 ELF valid
           printf '.SUFFIXES:\n' > Makefile.ps3
-          printf 'include %s\n\n' "$PPU_RULES" >> Makefile.ps3
           printf 'TARGET   := rafstream_ps3\n' >> Makefile.ps3
           printf 'BUILD    := build\n' >> Makefile.ps3
           printf 'SOURCES  := source\n' >> Makefile.ps3
           printf 'INCLUDES := include source\n\n' >> Makefile.ps3
-          printf 'CFLAGS   := -O2 -Wall $(MACHDEP) $(INCLUDE)\n' >> Makefile.ps3
+          printf 'include %s\n\n' "$PPU_RULES" >> Makefile.ps3
+          printf 'CFLAGS   := -O2 -Wall $(MACHDEP) -I$(CURDIR)/include -I$(CURDIR)/source -I$(PSL1GHT)/ppu/include -I$(PORTLIBS)/include\n' >> Makefile.ps3
           printf 'CXXFLAGS := $(CFLAGS)\n' >> Makefile.ps3
           printf 'LDFLAGS  := $(MACHDEP) -Wl,-Map,$(notdir $@).map\n' >> Makefile.ps3
           printf 'LIBS     := %s\n\n' "$LIBS" >> Makefile.ps3
@@ -195,8 +194,7 @@ jobs:
           printf 'OFILES   := $(CFILES:.c=.o)\n' >> Makefile.ps3
           printf 'export OUTPUT   := $(CURDIR)/$(TARGET)\n' >> Makefile.ps3
           printf 'export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))\n' >> Makefile.ps3
-          printf 'export DEPSDIR  := $(CURDIR)/$(BUILD)\n' >> Makefile.ps3
-          printf 'export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) $(LIBDIRS:-L%%=-I%%)\n\n' >> Makefile.ps3
+          printf 'export DEPSDIR  := $(CURDIR)/$(BUILD)\n\n' >> Makefile.ps3
           printf 'all: $(BUILD) $(OUTPUT).elf\n\n' >> Makefile.ps3
           printf '$(BUILD):\n\t@[ -d $@ ] || mkdir -p $@\n\n' >> Makefile.ps3
           printf '$(OUTPUT).elf: $(addprefix $(BUILD)/,$(OFILES))\n\t@echo linking $(notdir $@)\n\t@$(LD) $(LDFLAGS) $(addprefix $(BUILD)/,$(OFILES)) $(LIBPATHS) $(LIBS) -o $@\n\n' >> Makefile.ps3
@@ -214,7 +212,6 @@ jobs:
           PIC_FILE=$(find . -maxdepth 2 -iname "PIC1.PNG" | head -n 1)
           [ -n "$PIC_FILE" ] && cp "$PIC_FILE" pkg_build/PIC1.PNG
 
-          # Tandatangani EBOOT.BIN identik dengan struktur Free Homebrew NPDRM Yo! Player
           CONTENT_ID="HB0001-RAFSTRM01_00-RAFSTREAMPS30001"
           make_self_npdrm rafstream_ps3.elf pkg_build/USRDIR/EBOOT.BIN "$CONTENT_ID"
           test -s pkg_build/USRDIR/EBOOT.BIN
