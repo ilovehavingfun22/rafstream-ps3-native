@@ -96,9 +96,14 @@ int api_fetch_catalog(const char *category, const char *query, int page, MediaIt
     if (!root) return -2;
 
     cJSON *results = cJSON_GetObjectItemCaseSensitive(root, "results");
-    if (!results && cJSON_IsArray(root)) {
+    if (!results && ((root->type & 0xFF) == cJSON_Array)) {
         results = root;
     }
+    if (!results) {
+        cJSON_Delete(root);
+        return 0;
+    }
+
     int count = 0;
     int arr_size = cJSON_GetArraySize(results);
 
@@ -194,6 +199,10 @@ int api_fetch_episodes(int tv_id, int season, EpisodeItem *out_eps, int max_eps)
     if (!root) return -2;
 
     cJSON *eps = cJSON_GetObjectItemCaseSensitive(root, "episodes");
+    if (!eps) {
+        cJSON_Delete(root);
+        return 0;
+    }
     int count = 0;
     int arr_size = cJSON_GetArraySize(eps);
 
